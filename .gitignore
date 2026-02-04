@@ -1,0 +1,4 @@
+quantbox-core/node_modules/
+quantbox-core/dist/
+.env
+.DS_Store
