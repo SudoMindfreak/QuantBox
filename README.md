@@ -21,66 +21,60 @@ Create a powerful yet accessible trading platform where users can:
 ```
 QuantBox/
 ├── quantbox-core/        # Core trading engine (TypeScript)
-│   ├── src/
-│   │   ├── services/     # Market resolution & metadata
-│   │   ├── engine/       # Orderbook streaming & virtual wallet
-│   │   └── types/        # TypeScript type definitions
-│   └── README.md         # Core engine documentation
-│
-├── quantbox-ui/          # Visual node editor (Coming Soon)
-├── quantbox-strategies/  # Community strategies (Coming Soon)
-└── docs/                 # Shared documentation
-    ├── PROJECT.md        # Vision & roadmap
-    ├── ARCHITECTURE.md   # Technical architecture
-    ├── API.md           # API reference
-    ├── CHANGELOG.md     # Version history
-    ├── TODO.md          # Development roadmap
-    └── CONTRIBUTING.md  # Contribution guidelines
-```
+├── quantbox-server/      # Hono & Socket.io bridge (Strategy Execution)
+├── quantbox-ui/          # Next.js Visual Node Editor (React Flow)
+├── docs/                 # Shared documentation
+└── docker-compose.yml    # Docker orchestration
 
 ## 🚀 Quick Start
 
-### QuantBox Core (Trading Engine)
-
-The core engine provides real-time market data and paper trading capabilities:
+The easiest way to run QuantBox is using Docker:
 
 ```bash
-# Navigate to core
-cd quantbox-core
-
-# Install dependencies
-npm install
-
-# Run the demo
-npm run dev bitcoin-crosses-100000
+# Start all services (UI on :3000, Server on :3001)
+docker compose up --build
 ```
 
-**No authentication required for Phase 1 & 2!** The engine uses public APIs for market data and orderbook streaming.
+### Manual Development Setup
 
-See [`quantbox-core/README.md`](quantbox-core/README.md) for detailed usage.
+If you prefer to run services individually:
+
+```bash
+# 1. Install all dependencies at the root
+npm install
+
+# 2. Build the core library
+npm run build:core
+
+# 3. Start the server (Strategy Runner)
+npm run dev:server
+
+# 4. Start the UI (Visual Editor)
+npm run dev:ui
+```
 
 ## ✨ Features
 
-### ✅ Phase 1: Virtual Trading Engine (Complete)
+### ✅ Phase 1: Virtual Trading Engine
 - **Real-time Orderbook**: WebSocket streaming from Polymarket
 - **Paper Trading**: Simulate orders without real money
 - **Market Metadata**: Fetch market details via CLOB API
-- **PnL Tracking**: Calculate realized and unrealized profits
 
-### ✅ Phase 2: URL-Based Market Discovery (Complete)
-- **Smart Market Resolution**: Use URLs or slugs instead of condition IDs
-- **Gamma API Integration**: Fetch market data from Polymarket's public API
-- **Rolling Market Support**: Detect and handle time-sensitive markets
-- **Flexible Binary Markets**: Support for YES/NO, Up/Down, Higher/Lower
+### ✅ Phase 2: URL & Slug Market Discovery
+- **Smart Market Resolution**: Use URLs or slugs (e.g., `btc-updown-15m`)
+- **Gamma API Integration**: Intelligent market fetching
+- **Rolling Market Support**: Automatic discovery of active market instances
 
-### 🔄 Phase 3: Auto-Discovery (In Progress)
-- Market polling for rolling markets
-- Auto-subscription to new market instances
-- Event-driven architecture
+### ✅ Phase 2.5: Visual Strategy Framework (Current)
+- **Node-Based Editor**: Connect Market Detectors to Logic and Actions
+- **Strategy Runner**: Server-side execution of visual graphs
+- **Live Logs**: Real-time terminal for strategy monitoring
+- **Virtual Wallet**: Track balance and PnL per strategy instance
 
 ### 📅 Future Phases
+- **Phase 3**: Strategy Backtesting (Time Machine)
 - **Phase 4**: Live trading with real capital
-- **Phase 5**: Visual node editor & strategy framework
+- **Phase 5**: Advanced Logic (State Nodes, Loops, Custom Scripts)
 - **Phase 6**: Community strategy marketplace
 
 ## 🛠️ Technology Stack

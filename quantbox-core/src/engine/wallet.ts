@@ -51,7 +51,7 @@ export class VirtualWallet {
             slippage: 0,
         };
 
-        // For BUY orders, we take liquidity from the ASK side
+        // For BUY orders, we take liquidity from the ASK side (Lowest prices first)
         const asks = [...orderbook.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
 
         if (asks.length === 0) {
@@ -178,7 +178,7 @@ export class VirtualWallet {
             return order;
         }
 
-        // For SELL orders, we take liquidity from the BID side
+        // For SELL orders, we take liquidity from the BID side (Highest prices first)
         const bids = [...orderbook.bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
 
         if (bids.length === 0) {

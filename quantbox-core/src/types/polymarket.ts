@@ -26,6 +26,7 @@ export interface MarketToken {
 export interface MarketMetadata {
     condition_id: string;
     question: string;
+    slug: string;
     end_date_iso: string;
     tokens: MarketToken[];
     tick_size: number;
@@ -103,6 +104,7 @@ export interface GammaToken {
 export interface GammaMarket {
     conditionId: string;
     question: string;
+    slug: string;
     endDate: string;
     clobTokenIds: string | string[]; // Can be JSON string or array
     outcomes: string | string[]; // Can be JSON string or array  

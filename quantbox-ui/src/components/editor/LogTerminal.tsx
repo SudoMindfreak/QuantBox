@@ -1,7 +1,10 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
+import { ChevronDown } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 
 interface Log {
     timestamp: string;
@@ -11,11 +14,12 @@ interface Log {
 
 interface LogTerminalProps {
     strategyId: string;
+    isOpen: boolean;
+    onToggle: (open: boolean) => void;
 }
 
-export function LogTerminal({ strategyId }: LogTerminalProps) {
+export function LogTerminal({ strategyId, isOpen, onToggle }: LogTerminalProps) {
     const [logs, setLogs] = useState<Log[]>([]);
-    const [isOpen, setIsOpen] = useState(true);
     const scrollRef = useRef<HTMLDivElement>(null);
     const socketRef = useRef<Socket | null>(null);
 
@@ -28,7 +32,7 @@ export function LogTerminal({ strategyId }: LogTerminalProps) {
 
         socket.on('connect', () => {
             console.log('Connected to log stream');
-            socket.emit('subscribe', `strategy:${strategyId}`);
+            socket.emit('subscribe:strategy', strategyId);
         });
 
         socket.on('strategy:log', (log: Log) => {
@@ -49,36 +53,41 @@ export function LogTerminal({ strategyId }: LogTerminalProps) {
     if (!isOpen) {
         return (
             <div
-                className="absolute bottom-0 left-0 right-0 h-10 bg-slate-900 border-t border-slate-700 flex items-center px-4 cursor-pointer hover:bg-slate-800 transition-colors z-20"
-                onClick={() => setIsOpen(true)}
+                className="h-10 bg-slate-900 border-t border-slate-700 flex items-center px-4 cursor-pointer hover:bg-slate-800 transition-colors z-20 shrink-0"
+                onClick={() => onToggle(true)}
             >
-                <span className="text-slate-400 text-sm font-mono mr-2">Logs Terminal</span>
+                <div className="flex items-center gap-2">
+                    <span className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Logs Terminal</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                </div>
                 <div className="flex-1" />
-                <span className="text-slate-500">▲</span>
+                <span className="text-slate-500 text-xs">▲ EXPAND</span>
             </div>
         );
     }
 
     return (
-        <div className="absolute bottom-0 left-0 right-0 h-64 bg-slate-950 border-t border-slate-800 flex flex-col z-20 shadow-xl shadow-black/50">
+        <div className="h-64 bg-[#020617] border-t border-slate-800 flex flex-col z-20 shadow-2xl shrink-0">
             {/* Header */}
             <div className="h-10 bg-slate-900 border-b border-slate-800 flex items-center px-4 justify-between select-none">
-                <div className="flex items-center gap-2">
-                    <span className="text-slate-400 text-sm font-mono">Strategy Logs</span>
-                    <span className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-500 font-mono">Socket: {socketRef.current?.connected ? 'Connected' : 'Disconnected'}</span>
+                <div className="flex items-center gap-3">
+                    <span className="text-slate-200 text-[10px] font-black uppercase tracking-widest">Strategy Logs</span>
+                    <Badge variant="outline" className="bg-slate-950 text-[9px] text-slate-500 border-slate-800 h-5">
+                        {socketRef.current?.connected ? 'CONNECTED' : 'OFFLINE'}
+                    </Badge>
                 </div>
                 <div className="flex items-center gap-3">
                     <button
                         onClick={() => setLogs([])}
-                        className="text-slate-500 hover:text-slate-300 text-xs transition-colors"
+                        className="text-slate-500 hover:text-slate-300 text-[10px] font-bold uppercase transition-colors"
                     >
                         Clear
                     </button>
                     <button
-                        onClick={() => setIsOpen(false)}
-                        className="text-slate-500 hover:text-slate-300 text-lg leading-none"
+                        onClick={() => onToggle(false)}
+                        className="text-slate-500 hover:text-slate-300 p-1"
                     >
-                        ▼
+                        <ChevronDown className="w-4 h-4" />
                     </button>
                 </div>
             </div>

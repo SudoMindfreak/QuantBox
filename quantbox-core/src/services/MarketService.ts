@@ -29,6 +29,7 @@ export class MarketService {
         const metadata: MarketMetadata = {
             condition_id: market.condition_id,
             question: market.question,
+            slug: (market as any).slug || market.condition_id,
             end_date_iso: market.end_date_iso,
             tokens: market.tokens.map((t: any) => ({
                 token_id: t.token_id,
@@ -54,20 +55,35 @@ export class MarketService {
 
     /**
      * Extract token IDs from a binary market (first and second outcomes)
-     * Works with YES/NO, Up/Down, or any other two-outcome market
+     * Intelligent mapping based on outcome labels
      */
     extractTokenIds(market: MarketMetadata): { yes: string; no: string } {
-        if (market.tokens.length !== 2) {
-            throw new Error(`Market ${market.condition_id} must have exactly 2 tokens (has ${market.tokens.length})`);
+        if (market.tokens.length < 2) {
+            throw new Error(`Market ${market.condition_id} must have at least 2 tokens (has ${market.tokens.length})`);
         }
 
-        // Return first and second outcome tokens
-        // For YES/NO markets: 0=YES, 1=NO
-        // For Up/Down markets: 0=Up, 1=Down
-        // The variable names 'yes'/'no' are kept for backward compatibility
+        let yesToken = '';
+        let noToken = '';
+
+        for (const token of market.tokens) {
+            const outcome = token.outcome.toLowerCase();
+            if (outcome === 'yes' || outcome === 'up' || outcome === 'higher' || outcome === 'over') {
+                yesToken = token.token_id;
+            } else if (outcome === 'no' || outcome === 'down' || outcome === 'lower' || outcome === 'under') {
+                noToken = token.token_id;
+            }
+        }
+
+        // Fallback to indices if labels don't match standard patterns
+        if (!yesToken || !noToken) {
+            console.log('⚠️ Could not identify tokens by label, falling back to indices');
+            yesToken = market.tokens[0].token_id;
+            noToken = market.tokens[1].token_id;
+        }
+
         return {
-            yes: market.tokens[0].token_id,
-            no: market.tokens[1].token_id,
+            yes: yesToken,
+            no: noToken,
         };
     }
 

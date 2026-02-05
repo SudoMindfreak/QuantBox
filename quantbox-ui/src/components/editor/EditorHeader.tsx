@@ -1,22 +1,37 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowLeft, Save } from 'lucide-react';
+import { ArrowLeft, Save, Play, Square, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 interface EditorHeaderProps {
     strategyName: string;
     initialBalance: number;
+    isRunning: boolean;
     onNameChange: (name: string) => void;
     onBalanceChange: (balance: number) => void;
     onSave: () => Promise<void>;
+    onRun: () => Promise<void>;
+    onStop: () => Promise<void>;
     onToggleOrderbook: () => void;
     isOrderbookOpen: boolean;
 }
 
-export function EditorHeader({ strategyName, initialBalance, onNameChange, onBalanceChange, onSave, onToggleOrderbook, isOrderbookOpen }: EditorHeaderProps) {
+export function EditorHeader({
+    strategyName,
+    initialBalance,
+    isRunning,
+    onNameChange,
+    onBalanceChange,
+    onSave,
+    onRun,
+    onStop,
+    onToggleOrderbook,
+    isOrderbookOpen
+}: EditorHeaderProps) {
     const router = useRouter();
     const [isSaving, setIsSaving] = useState(false);
+    const [isStarting, setIsStarting] = useState(false);
 
     const handleSave = async () => {
         setIsSaving(true);
@@ -27,8 +42,21 @@ export function EditorHeader({ strategyName, initialBalance, onNameChange, onBal
         }
     };
 
+    const handleRunClick = async () => {
+        setIsStarting(true);
+        try {
+            if (isRunning) {
+                await onStop();
+            } else {
+                await onRun();
+            }
+        } finally {
+            setIsStarting(false);
+        }
+    };
+
     return (
-        <div className="h-16 bg-slate-800 border-b border-slate-700 px-6 flex items-center justify-between">
+        <div className="h-16 bg-slate-800 border-b border-slate-700 px-6 flex items-center justify-between shadow-md z-30">
             <div className="flex items-center gap-4">
                 <button
                     onClick={() => router.push('/')}
@@ -39,10 +67,10 @@ export function EditorHeader({ strategyName, initialBalance, onNameChange, onBal
                 </button>
 
                 <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                    <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center shadow-inner">
                         <span className="text-white font-bold text-sm">Q</span>
                     </div>
-                    <span className="text-white font-semibold text-lg">QuantBox</span>
+                    <span className="text-white font-semibold text-lg hidden md:block">QuantBox</span>
                 </div>
 
                 <div className="mx-4 h-6 w-px bg-slate-700" />
@@ -51,70 +79,64 @@ export function EditorHeader({ strategyName, initialBalance, onNameChange, onBal
                     type="text"
                     value={strategyName}
                     onChange={(e) => onNameChange(e.target.value)}
-                    className="px-3 py-1.5 bg-slate-900 text-white rounded border border-slate-700 focus:border-blue-500 focus:outline-none text-sm min-w-[200px]"
+                    className="px-3 py-1.5 bg-slate-950 text-white rounded border border-slate-700 focus:border-blue-500 focus:outline-none text-sm min-w-[200px] font-medium"
                     placeholder="Strategy name"
                 />
             </div>
 
             <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                    <label className="text-sm text-slate-400">Initial Balance:</label>
-                    <div className="flex items-center gap-1">
-                        <span className="text-slate-400 text-sm">$</span>
+                <div className="hidden lg:flex items-center gap-2 mr-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Initial Balance:</label>
+                    <div className="flex items-center gap-1 bg-slate-950 px-2 py-1.5 rounded border border-slate-700">
+                        <span className="text-slate-500 text-xs">$</span>
                         <input
                             type="number"
                             value={initialBalance}
                             onChange={(e) => onBalanceChange(Number(e.target.value))}
-                            className="w-24 px-2 py-1.5 bg-slate-900 text-white rounded border border-slate-700 focus:border-blue-500 focus:outline-none text-sm"
+                            className="w-20 bg-transparent text-white focus:outline-none text-sm font-mono"
                         />
-                        <span className="text-slate-400 text-sm">USDC</span>
+                        <span className="text-slate-500 text-[10px] font-bold">USDC</span>
                     </div>
                 </div>
 
                 <button
                     onClick={onToggleOrderbook}
-                    className={`px-3 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm font-medium border ${isOrderbookOpen
-                        ? 'bg-slate-700 text-blue-400 border-blue-500/50'
-                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+                    className={`px-3 py-2 rounded-lg flex items-center gap-2 transition-all text-sm font-medium border ${isOrderbookOpen
+                        ? 'bg-blue-600/20 text-blue-400 border-blue-500/50 shadow-[0_0_10px_rgba(59,130,246,0.2)]'
+                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200'
                         }`}
                 >
                     <span className="text-lg">📊</span>
-                    Orderbook
+                    <span className="hidden sm:inline">Orderbook</span>
                 </button>
 
                 <button
                     onClick={handleSave}
                     disabled={isSaving}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white rounded-lg flex items-center gap-2 transition-colors text-sm font-medium"
+                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg flex items-center gap-2 transition-all text-sm font-medium border border-slate-600 shadow-sm"
                 >
-                    <Save className="w-4 h-4" />
-                    {isSaving ? 'Saving...' : 'Save'}
+                    {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    <span className="hidden sm:inline">Save</span>
                 </button>
 
                 <div className="h-6 w-px bg-slate-700 mx-2" />
 
                 <button
-                    onClick={async () => {
-                        // Optimistic UI/Action
-                        const id = window.location.pathname.split('/').pop();
-                        if (id && id !== 'new') {
-                            try {
-                                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/strategies/${id}/start`, {
-                                    method: 'POST'
-                                });
-                                if (res.ok) {
-                                    console.log('Strategy started');
-                                    // We rely on socket logs for feedback
-                                }
-                            } catch (err) {
-                                console.error('Failed to run', err);
-                            }
-                        }
-                    }}
-                    className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-2 transition-colors text-sm font-medium shadow-lg shadow-green-900/20"
+                    onClick={handleRunClick}
+                    disabled={isStarting}
+                    className={`px-5 py-2 rounded-lg flex items-center gap-2 transition-all text-sm font-bold shadow-lg ${isRunning
+                        ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-900/20'
+                        : 'bg-green-600 hover:bg-green-700 text-white shadow-green-900/20'
+                        } disabled:opacity-50`}
                 >
-                    <span className="text-lg">▶</span>
-                    Run
+                    {isStarting ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : isRunning ? (
+                        <Square className="w-4 h-4 fill-current" />
+                    ) : (
+                        <Play className="w-4 h-4 fill-current" />
+                    )}
+                    {isRunning ? 'Stop' : 'Run'}
                 </button>
             </div>
         </div>

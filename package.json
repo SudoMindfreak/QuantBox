@@ -12,14 +12,19 @@
         "dev:ui": "npm run dev --workspace=quantbox-ui",
         "dev:core": "npm run dev --workspace=quantbox-core",
         "dev": "npm-run-all --parallel dev:server dev:ui",
+        "build:core": "npm run build --workspace=quantbox-core",
         "build:server": "npm run build --workspace=quantbox-server",
         "build:ui": "npm run build --workspace=quantbox-ui",
-        "build": "npm-run-all build:server build:ui",
+        "build": "npm-run-all build:core build:server build:ui",
         "db:generate": "npm run db:generate --workspace=quantbox-server",
         "db:migrate": "npm run db:migrate --workspace=quantbox-server",
         "db:studio": "npm run db:studio --workspace=quantbox-server"
     },
     "devDependencies": {
-        "npm-run-all": "^4.1.5"
+        "@types/node": "^25.2.0",
+        "lightningcss-linux-x64-gnu": "^1.31.1",
+        "npm-run-all": "^4.1.5",
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3"
     }
 }

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { GammaEvent, GammaMarket, MarketMetadata } from '../types/polymarket';
 import { ClobClient } from '@polymarket/clob-client';
+import { MarketTypeDetector } from './MarketTypeDetector';
 
 /**
  * MarketResolver - Intelligent market fetching and rollover
@@ -14,36 +15,70 @@ import { ClobClient } from '@polymarket/clob-client';
 export class MarketResolver {
     private clobClient: ClobClient;
     private gammaApiBase = 'https://gamma-api.polymarket.com';
+    private detector: MarketTypeDetector;
 
     constructor(clobClient: ClobClient) {
         this.clobClient = clobClient;
+        this.detector = new MarketTypeDetector();
+    }
+
+    private getIntervalSeconds(category: string): number {
+        switch (category) {
+            case '1h': return 3600;
+            case '4h': return 14400;
+            case '15m':
+            default: return 900;
+        }
     }
 
     /**
      * Main entry point: Resolve any input (URL, slug, condition ID) to market metadata
      */
-    async resolve(input: string): Promise<MarketMetadata> {
+    async resolve(input: string, category?: string): Promise<MarketMetadata> {
         const parsed = this.parseInput(input);
 
-        console.log(`🔍 Resolving market: ${parsed.type} = "${parsed.value}"`);
+        console.log(`🔍 Resolving market: ${parsed.type} = "${parsed.value}" (Category: ${category || 'none'})`);
 
         if (parsed.type === 'condition_id') {
-            // Direct fetch by condition ID (backward compatibility)
             return await this.fetchByConditionId(parsed.value);
         }
 
-        // Fetch event by slug
-        let slug = parsed.value;
-        let event = await this.fetchEventBySlug(slug);
+        const slug = parsed.value;
+        const baseSlug = this.detector.extractBaseSlug(slug);
+        const isRolling = category === '15m' || category === '1h' || category === '4h' || 
+                          baseSlug !== slug || slug.endsWith('-15m') || slug.endsWith('-1h') || slug.endsWith('-4h');
 
-        if (!event) {
-            throw new Error(`Market not found for slug: ${slug}`);
+        // 1. Try resolving the specific slug provided
+        try {
+            const event = await this.fetchEventBySlug(slug);
+            if (event && event.markets && event.markets.length > 0) {
+                const market = event.markets[0];
+                const now = Math.floor(Date.now() / 1000);
+                const marketEnd = new Date(market.endDate).getTime() / 1000;
+
+                // If it's active, we're done
+                if (market.active && marketEnd > now) {
+                    return this.gammaToMarketMetadata(market);
+                }
+                
+                // If it's expired and rolling, continue to discovery
+                if (isRolling) {
+                    console.log(`⏰ Market "${slug}" is expired, searching for current instance...`);
+                } else {
+                    return this.gammaToMarketMetadata(market); // One-off, return as-is
+                }
+            }
+        } catch (err) {
+            console.log(`ℹ️  Slug "${slug}" not found, moving to discovery...`);
         }
 
-        // Check if this is a rolling market (has timestamp in slug)
-        const activeMarket = await this.ensureActiveMarket(event, slug);
+        // 2. Discovery logic for rolling markets
+        if (isRolling) {
+            const interval = this.getIntervalSeconds(category || '15m');
+            return await this.findCurrentRollingMarket(slug, interval);
+        }
 
-        return this.gammaToMarketMetadata(activeMarket);
+        throw new Error(`Market not found: ${slug}`);
     }
 
     /**
@@ -101,61 +136,46 @@ export class MarketResolver {
      * - If market is expired, calculate current 15-min window
      * - Poll Gamma API for the active market
      */
-    async ensureActiveMarket(event: GammaEvent, originalSlug: string): Promise<GammaMarket> {
+    async ensureActiveMarket(event: GammaEvent, originalSlug: string, category?: string): Promise<GammaMarket> {
         const firstMarket = event.markets[0];
 
         if (!firstMarket) {
             throw new Error(`Event has no markets: ${event.title}`);
         }
 
-        // Check if this is a timestamped rolling market
-        const slugParts = originalSlug.split('-');
-        const lastPart = slugParts[slugParts.length - 1];
-
-        if (!this.isNumeric(lastPart)) {
-            // Not a timestamped market, return as-is
-            console.log('✅ Market does not have timestamp suffix, using as-is');
-            return firstMarket;
-        }
-
-        // It's a rolling market! Check if it's active
-        const marketTimestamp = parseInt(lastPart);
         const now = Math.floor(Date.now() / 1000);
-        const marketEnd = marketTimestamp + 900; // 15 minutes after start
+        const marketEnd = new Date(firstMarket.endDate).getTime() / 1000;
 
-        if (now < marketEnd) {
-            // Market is still active
-            console.log(`✅ Market is active (ends at ${new Date(marketEnd * 1000).toLocaleTimeString()})`);
+        // If market is still active, use it
+        if (now < marketEnd && firstMarket.active) {
             return firstMarket;
         }
 
-        // Market expired! Calculate current active market
-        console.log('⏰ Market expired, rolling over to current active market...');
+        // Market is expired or inactive, check if it's a rolling market
+        const baseSlug = this.detector.extractBaseSlug(originalSlug);
+        const isRolling = category === '15m' || category === '1h' || category === '4h' || 
+                          baseSlug !== originalSlug || originalSlug.endsWith('-15m');
 
-        const baseSlug = slugParts.slice(0, -1).join('-');
-        const currentWindowStart = Math.floor(now / 900) * 900;
-
-        // Try to find the current active market
-        for (let attempt = 0; attempt < 12; attempt++) {
-            const targetTimestamp = currentWindowStart + (attempt * 900);
-            const targetSlug = `${baseSlug}-${targetTimestamp}`;
-
-            console.log(`🔍 Attempt ${attempt + 1}/12: Trying ${targetSlug}`);
-
-            const targetEvent = await this.fetchEventBySlug(targetSlug);
-
-            if (targetEvent && targetEvent.markets && targetEvent.markets.length > 0) {
-                console.log(`✅ Found active market: ${targetEvent.title}`);
-                return targetEvent.markets[0];
-            }
-
-            // Wait before next attempt (except on last iteration)
-            if (attempt < 11) {
-                await this.sleep(5000); // 5 seconds
+        if (isRolling) {
+            console.log(`⏰ Market "${originalSlug}" is expired, searching for current instance...`);
+            
+            const interval = this.getIntervalSeconds(category || '15m');
+            const currentMetadata = await this.findCurrentRollingMarket(originalSlug, interval);
+            
+            // Re-fetch event for the resolved active slug to get the GammaMarket object
+            // We use the question title to search or the baseSlug
+            const searchTerms = currentMetadata.question.split(' - ')[0]; // E.g. "Bitcoin Up or Down"
+            const activeEvent = await this.fetchEventBySlug(baseSlug); 
+            
+            if (activeEvent && activeEvent.markets && activeEvent.markets.length > 0) {
+                // Find the market that matches the condition ID we resolved
+                const matched = activeEvent.markets.find(m => m.conditionId === currentMetadata.condition_id);
+                if (matched) return matched;
+                return activeEvent.markets[0];
             }
         }
 
-        throw new Error(`Could not find active rolling market for ${baseSlug}`);
+        return firstMarket;
     }
 
     /**
@@ -169,6 +189,7 @@ export class MarketResolver {
         return {
             condition_id: market.condition_id,
             question: market.question,
+            slug: (market as any).slug || market.condition_id,
             end_date_iso: market.end_date_iso,
             tokens: market.tokens.map((t: any) => ({
                 token_id: t.token_id,
@@ -187,8 +208,6 @@ export class MarketResolver {
      * Convert Gamma API market to our MarketMetadata type
      */
     gammaToMarketMetadata(gammaMarket: GammaMarket): MarketMetadata {
-        console.log('🔍 DEBUG: Gamma market data:', JSON.stringify(gammaMarket, null, 2));
-
         // Parse outcomes if they're a JSON string
         let outcomes: string[] = [];
         if (typeof gammaMarket.outcomes === 'string') {
@@ -239,6 +258,7 @@ export class MarketResolver {
         return {
             condition_id: gammaMarket.conditionId,
             question: gammaMarket.question,
+            slug: gammaMarket.slug,
             end_date_iso: gammaMarket.endDate,
             tokens,
             tick_size: 0.01, // Default, will be overridden by CLOB API if needed
@@ -264,54 +284,122 @@ export class MarketResolver {
     }
 
     /**
-     * Resolve market from base slug (for 15-minute rolling markets)
-     * 
-     * @param baseSlug - Base slug without timestamp (e.g., 'btc-updown-15m')
-     * @returns Current active market instance
+     * Resolve market from base slug or old instance slug
      */
-    async resolveFromBaseSlug(baseSlug: string): Promise<MarketMetadata> {
-        // For 15min markets (base slug ends with '-15m')
-        if (baseSlug.endsWith('-15m')) {
-            console.log(`🔍 Searching for current 15min market: ${baseSlug}-*`);
-            return await this.findCurrent15MinMarket(baseSlug);
-        }
-
-        // Fallback to regular resolution (one-off markets)
-        console.log(`🔍 Treating as one-off market: ${baseSlug}`);
-        return await this.resolve(baseSlug);
+    async resolveFromBaseSlug(baseSlug: string, category?: string): Promise<MarketMetadata> {
+        const interval = this.getIntervalSeconds(category || '15m');
+        console.log(`🔍 Using predictive rollover for ${category || '15m'} market (Interval: ${interval}s)`);
+        
+        return await this.findCurrentRollingMarket(baseSlug, interval);
     }
 
     /**
-     * Find the current active 15-minute rolling market
-     * 
-     * @param baseSlug - Base slug (e.g., 'btc-updown-15m')
-     * @returns Market with the nearest end time (most current instance)
+     * Find the current active rolling market using predictive timestamps
+     */
+    private async findCurrentRollingMarket(slugOrBase: string, interval: number): Promise<MarketMetadata> {
+        const now = Math.floor(Date.now() / 1000);
+        
+        // 1. Extract base and timestamp if exists
+        const parts = slugOrBase.split('-');
+        const lastPart = parts[parts.length - 1];
+        let base = slugOrBase;
+        let ts = 0;
+
+        if (this.isNumeric(lastPart)) {
+            ts = parseInt(lastPart);
+            base = parts.slice(0, -1).join('-');
+        }
+
+        // 2. Calculate target timestamp (Logic from example.py)
+        // If we have a timestamp and it's recent (within 2 intervals), try next one.
+        // Otherwise, jump to the current time block.
+        let targetTs: number;
+        if (ts > 0 && (now - ts) <= (interval * 2)) {
+            targetTs = ts + interval;
+        } else {
+            targetTs = Math.floor(now / interval) * interval;
+        }
+
+        console.log(`🎯 Predicted next timestamp: ${targetTs} (from ${ts || 'none'})`);
+
+        // 3. Try to fetch the predicted slug and its neighbors
+        // We try 3 windows: current, next, and previous (just in case of slight delays)
+        const windows = [targetTs, targetTs + interval, targetTs - interval];
+        
+        for (const windowTs of windows) {
+            const predictedSlug = `${base}-${windowTs}`;
+            console.log(`   Trying: ${predictedSlug}...`);
+            const event = await this.fetchEventBySlug(predictedSlug);
+            
+            if (event && event.markets && event.markets.length > 0) {
+                const market = event.markets[0];
+                const marketEnd = new Date(market.endDate).getTime() / 1000;
+                
+                if (market.active && marketEnd > now) {
+                    console.log(`✅ Found active market: ${predictedSlug}`);
+                    return this.gammaToMarketMetadata(market);
+                }
+            }
+        }
+
+        // 4. Fallback: If predictive fails, search Gamma API (the old way)
+        console.log('⚠️  Predictive fetch failed, falling back to Gamma search...');
+        return await this.findCurrent15MinMarket(base);
+    }
+
+    /**
+     * Find the current active 15-minute rolling market (Search Fallback)
      */
     private async findCurrent15MinMarket(baseSlug: string): Promise<MarketMetadata> {
         try {
-            // Fetch active events from Gamma API
+            console.log(`🔍 Searching for active instances of "${baseSlug}"...`);
+            
+            // Try fetching with a query parameter first for better filtering
             const response = await axios.get(`${this.gammaApiBase}/events`, {
                 params: {
                     active: true,
-                    limit: 50,
-                    offset: 0
+                    limit: 100,
+                    query: baseSlug
                 }
             });
 
-            if (!response.data || !Array.isArray(response.data)) {
-                throw new Error('Invalid response from Gamma API');
+            if (!response.data || !Array.isArray(response.data) || response.data.length === 0) {
+                // If query failed, try fetching more active events as fallback
+                console.log('⚠️  Query returned no results, trying broader search...');
+                const fallbackRes = await axios.get(`${this.gammaApiBase}/events`, {
+                    params: {
+                        active: true,
+                        limit: 100,
+                        offset: 0
+                    }
+                });
+                response.data = fallbackRes.data;
             }
 
-            // Pattern to match: <baseSlug>-<10-digit-unix-timestamp>
-            const pattern = new RegExp(`^${this.escapeRegExp(baseSlug)}-\\d{10}$`);
+            // Pattern to match: <something>-15m-<unix_timestamp>
+            // Note: baseSlug might be 'btc-updown-15m' or 'btc-updown'
+            const cleanBase = baseSlug.replace('-15m', '');
+            const pattern = new RegExp(`^${this.escapeRegExp(cleanBase)}-15m-\\d{10}$`, 'i');
 
             // Filter for matching 15min markets
             const matchingEvents = response.data.filter((event: GammaEvent) => {
-                return pattern.test(event.slug) && event.active && !event.closed;
+                return (pattern.test(event.slug) || event.slug.includes(baseSlug)) && 
+                       event.active && !event.closed;
             });
 
             if (matchingEvents.length === 0) {
-                throw new Error(`No active 15min markets found for base slug: ${baseSlug}`);
+                // Last ditch effort: Search for the common series slug
+                console.log('⚠️  No exact matches, searching for series: btc-up-or-down-15m');
+                const seriesRes = await axios.get(`${this.gammaApiBase}/events`, {
+                    params: { active: true, query: 'btc-up-or-down-15m' }
+                });
+                
+                const seriesMatches = seriesRes.data.filter((e: any) => e.active && !e.closed);
+                if (seriesMatches.length > 0) {
+                    matchingEvents.push(...seriesMatches);
+                } else {
+                    throw new Error(`No active 15min markets found for base slug: ${baseSlug}`);
+                }
             }
 
             // Sort by end time (earliest = current instance)
@@ -322,8 +410,8 @@ export class MarketResolver {
             });
 
             const currentEvent = sorted[0];
-            console.log(`✅ Found current 15min market: ${currentEvent.slug}`);
-            console.log(`   End time: ${currentEvent.end_date_iso || currentEvent.markets[0]?.endDate}`);
+            console.log(`✅ Found current instance: ${currentEvent.slug}`);
+            console.log(`   Question: ${currentEvent.title}`);
 
             // Use existing resolve logic
             return await this.resolve(currentEvent.slug);

@@ -11,160 +11,180 @@ export class OrderbookStream extends EventEmitter {
     private subscribedTokens: Set<string> = new Set();
     private keepAliveInterval: NodeJS.Timeout | null = null;
     private reconnectTimeout: NodeJS.Timeout | null = null;
-    private isConnecting = false;
-
-    /**
-     * Connect to the WebSocket feed
-     */
-    async connect(): Promise<void> {
-        if (this.ws?.readyState === WebSocket.OPEN) {
-            console.log('⚠️  Already connected to WebSocket');
-            return;
-        }
-
-        if (this.isConnecting) {
-            console.log('⚠️  Connection already in progress');
-            return;
-        }
-
-        this.isConnecting = true;
-        console.log('🔌 Connecting to Polymarket WebSocket...');
-
-        return new Promise((resolve, reject) => {
-            this.ws = new WebSocket(this.wsUrl);
-
-            this.ws.on('open', () => {
-                console.log('✅ WebSocket connected!');
-                this.isConnecting = false;
-                this.startKeepAlive();
-
-                // Re-subscribe to any previously subscribed tokens
-                if (this.subscribedTokens.size > 0) {
-                    const tokens = Array.from(this.subscribedTokens);
-                    console.log(`♻️  Re-subscribing to ${tokens.length} token(s)...`);
-                    this.sendSubscription(tokens);
-                }
-
-                resolve();
-            });
-
-            this.ws.on('message', (data: WebSocket.Data) => {
-                this.handleMessage(data);
-            });
-
-            this.ws.on('error', (error) => {
-                console.error('❌ WebSocket error:', error.message);
-                this.isConnecting = false;
-                reject(error);
-            });
-
-            this.ws.on('close', () => {
-                console.log('🔌 WebSocket disconnected');
-                this.isConnecting = false;
-                this.stopKeepAlive();
-
-                // Attempt to reconnect after 5 seconds
-                console.log('⏳ Reconnecting in 5 seconds...');
-                this.reconnectTimeout = setTimeout(() => {
-                    this.connect().catch(err => {
-                        console.error('Reconnection failed:', err.message);
-                    });
-                }, 5000);
-            });
-        });
-    }
-
-    /**
-     * Subscribe to orderbook updates for specific token IDs
-     */
-    subscribe(tokenIds: string[]): void {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.error('❌ Cannot subscribe: WebSocket not connected');
-            return;
-        }
-
-        // Add to subscribed set for reconnection handling
-        tokenIds.forEach(id => this.subscribedTokens.add(id));
-
-        this.sendSubscription(tokenIds);
-    }
-
-    /**
-     * Send subscription message to WebSocket
-     */
-    private sendSubscription(tokenIds: string[]): void {
-        const subscriptionMessage = {
-            type: 'market',
-            assets_ids: tokenIds,
-        };
-
-        this.ws?.send(JSON.stringify(subscriptionMessage));
-        console.log(`📡 Subscribed to ${tokenIds.length} token(s)`);
-        tokenIds.forEach(id => {
-            console.log(`   - ${id.substring(0, 12)}...`);
-        });
-    }
-
-    /**
-     * Handle incoming WebSocket messages
-     */
-    private handleMessage(data: WebSocket.Data): void {
-        try {
-            const msgString = data.toString();
-            if (msgString.includes('INVALID') || !msgString.startsWith('{') && !msgString.startsWith('[')) {
-                console.warn(`[Polymarket WS] Ignored non-JSON message: ${msgString}`);
+        private isConnecting = false;
+        private subscriptionTimeout: NodeJS.Timeout | null = null;
+    
+        /**
+         * Connect to the WebSocket feed
+         */
+        async connect(): Promise<void> {
+            if (this.ws?.readyState === WebSocket.OPEN) {
                 return;
             }
-            const message: OrderBookMessage = JSON.parse(msgString);
-
-            // Emit different events based on message type
-            if (message.event_type === 'book') {
-                this.emit('orderbook', message);
-
-                // Also emit token-specific event for easier filtering
-                this.emit(`orderbook:${message.asset_id}`, message);
-            } else if (message.event_type === 'price_change') {
-                this.emit('price_change', message);
-            } else if (message.event_type === 'last_trade_price') {
-                this.emit('last_trade', message);
+    
+            if (this.isConnecting) {
+                return;
             }
-        } catch (error) {
-            console.error('❌ Error parsing WebSocket message:', error);
+    
+            this.isConnecting = true;
+            console.log('🔌 Connecting to Polymarket WebSocket...');
+    
+            return new Promise((resolve, reject) => {
+                this.ws = new WebSocket(this.wsUrl);
+    
+                this.ws.on('open', () => {
+                    console.log('✅ WebSocket connected!');
+                    this.isConnecting = false;
+                    this.startKeepAlive();
+    
+                    // Re-subscribe to all tokens
+                    if (this.subscribedTokens.size > 0) {
+                        this.sendSubscription();
+                    }
+    
+                    resolve();
+                });
+    
+                this.ws.on('message', (data: WebSocket.Data) => {
+                    this.handleMessage(data);
+                });
+    
+                this.ws.on('error', (error) => {
+                    console.error('❌ WebSocket error:', error.message);
+                    this.isConnecting = false;
+                    reject(error);
+                });
+    
+                this.ws.on('close', () => {
+                    console.log('🔌 WebSocket disconnected');
+                    this.isConnecting = false;
+                    this.stopKeepAlive();
+    
+                    // Attempt to reconnect after 5 seconds
+                    console.log('⏳ Reconnecting in 5 seconds...');
+                    this.reconnectTimeout = setTimeout(() => {
+                        this.connect().catch(err => {
+                            console.error('Reconnection failed:', err.message);
+                        });
+                    }, 5000);
+                });
+            });
         }
-    }
-
-    /**
-     * Start keep-alive ping every 30 seconds to prevent disconnection
-     */
-    private startKeepAlive(): void {
-        this.keepAliveInterval = setInterval(() => {
-            if (this.ws?.readyState === WebSocket.OPEN) {
-                this.ws.ping();
-                // console.log('💓 Keep-alive ping sent');
+    
+        /**
+         * Subscribe to orderbook updates for specific token IDs
+         */
+        subscribe(tokenIds: string[]): void {
+            // Add to subscribed set
+            let added = false;
+            tokenIds.forEach(id => {
+                if (!this.subscribedTokens.has(id)) {
+                    this.subscribedTokens.add(id);
+                    added = true;
+                }
+            });
+    
+            if (added) {
+                this.sendSubscription();
             }
-        }, 30000); // 30 seconds
-    }
-
-    /**
-     * Stop keep-alive interval
-     */
-    private stopKeepAlive(): void {
-        if (this.keepAliveInterval) {
-            clearInterval(this.keepAliveInterval);
-            this.keepAliveInterval = null;
         }
-    }
-
-    /**
-     * Unsubscribe from specific tokens
-     */
-    unsubscribe(tokenIds: string[]): void {
-        tokenIds.forEach(id => this.subscribedTokens.delete(id));
-
-        // Note: Polymarket WebSocket API doesn't have explicit unsubscribe
-        // So we just remove from our tracking set
-        console.log(`🔕 Unsubscribed from ${tokenIds.length} token(s)`);
-    }
+    
+        /**
+         * Send subscription message to WebSocket (Full list)
+         */
+        private sendSubscription(): void {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    
+            // Debounce to avoid "INVALID OPERATION" from rapid calls
+            if (this.subscriptionTimeout) clearTimeout(this.subscriptionTimeout);
+    
+            this.subscriptionTimeout = setTimeout(() => {
+                const allTokens = Array.from(this.subscribedTokens);
+                if (allTokens.length === 0) return;
+    
+                const subscriptionMessage = {
+                    type: 'market',
+                    assets_ids: allTokens,
+                    initial_dump: true,
+                    auth: {}
+                };
+    
+                this.ws?.send(JSON.stringify(subscriptionMessage));
+                console.log(`📡 [WS] Subscribed to ${allTokens.length} total tokens`);
+            }, 100);
+        }
+    
+        /**
+         * Handle incoming WebSocket messages
+         */
+        private handleMessage(data: WebSocket.Data): void {
+            try {
+                const msgString = data.toString();
+                
+                // Handle PONG/Keep-alive
+                if (msgString === 'PONG') return;
+    
+                if (msgString.includes('INVALID') || (!msgString.startsWith('{') && !msgString.startsWith('['))) {
+                    console.warn(`[Polymarket WS] Ignored message: ${msgString}`);
+                    return;
+                }
+                
+                const message: any = JSON.parse(msgString);
+                const messages = Array.isArray(message) ? message : [message];
+    
+                for (const msg of messages) {
+                    // Emit different events based on message type
+                    if (msg.event_type === 'book') {
+                        this.emit('orderbook', msg);
+                        this.emit(`orderbook:${msg.asset_id}`, msg);
+                    } else if (msg.event_type === 'price_change') {
+                        this.emit('price_change', msg);
+                    } else if (msg.event_type === 'last_trade_price') {
+                        this.emit('last_trade', msg);
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Error parsing WebSocket message:', error);
+            }
+        }
+    
+        /**
+         * Start keep-alive ping every 20 seconds
+         */
+        private startKeepAlive(): void {
+            this.keepAliveInterval = setInterval(() => {
+                if (this.ws?.readyState === WebSocket.OPEN) {
+                    this.ws.send('PING');
+                }
+            }, 20000); // 20 seconds
+        }
+    
+        /**
+         * Stop keep-alive interval
+         */
+        private stopKeepAlive(): void {
+            if (this.keepAliveInterval) {
+                clearInterval(this.keepAliveInterval);
+                this.keepAliveInterval = null;
+            }
+        }
+    
+        /**
+         * Unsubscribe from specific tokens
+         */
+        unsubscribe(tokenIds: string[]): void {
+            let removed = false;
+            tokenIds.forEach(id => {
+                if (this.subscribedTokens.delete(id)) {
+                    removed = true;
+                }
+            });
+    
+            if (removed) {
+                this.sendSubscription();
+            }
+            console.log(`🔕 Unsubscribed from ${tokenIds.length} tokens`);
+        }
 
     /**
      * Switch subscription from old tokens to new tokens

@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { io, Socket } from 'socket.io-client';
-import { Badge } from '@/components/ui/badge';
+import { io } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 
 interface OrderBookLevel {
     price: string;
@@ -17,146 +17,223 @@ interface OrderBookData {
 }
 
 interface LiveOrderbookProps {
-    assetId?: string; // The Polymarket asset ID to track
+    marketSlug?: string; // The Polymarket slug to track
 }
 
-export function LiveOrderbook({ assetId }: LiveOrderbookProps) {
-    const [bids, setBids] = useState<OrderBookLevel[]>([]);
-    const [asks, setAsks] = useState<OrderBookLevel[]>([]);
+export function LiveOrderbook({ marketSlug }: LiveOrderbookProps) {
+    const [tokenIds, setTokenIds] = useState<{ yes: string; no: string } | null>(null);
+    const tokenIdsRef = useRef<{ yes: string; no: string } | null>(null);
+    const [outcomes, setOutcomes] = useState<{ yes: string; no: string }>({ yes: 'UP', no: 'DOWN' });
+    const [selectedOutcome, setSelectedOutcome] = useState<'yes' | 'no'>('yes');
+    const [orderbooks, setOrderbooks] = useState<Record<string, OrderBookData>>({});
     const [isConnected, setIsConnected] = useState(false);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
     const socketRef = useRef<Socket | null>(null);
 
+    // Sync ref with state
     useEffect(() => {
-        // Initialize socket connection
+        tokenIdsRef.current = tokenIds;
+    }, [tokenIds]);
+
+    // 1. Resolve marketSlug to Token IDs
+    useEffect(() => {
+        if (!marketSlug) return;
+
+        setOrderbooks({});
+        setTokenIds(null);
+
+        const resolveMarket = async () => {
+            setIsLoading(true);
+            try {
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/markets/resolve?input=${marketSlug}`);
+                if (!response.ok) throw new Error('Failed to resolve market');
+                const data = await response.json();
+                
+                console.log(`[Orderbook] Resolved market:`, data.tokenIds);
+                setTokenIds(data.tokenIds);
+                
+                // Identify outcomes (Standardize to UP/DOWN for display)
+                const tokens = data.tokens || [];
+                let upLabel = 'UP';
+                let downLabel = 'DOWN';
+                
+                tokens.forEach((t: any) => {
+                    const out = t.outcome.toLowerCase();
+                    if (out === 'up' || out === 'yes') upLabel = t.outcome;
+                    if (out === 'down' || out === 'no') downLabel = t.outcome;
+                });
+
+                setOutcomes({ yes: upLabel, no: downLabel });
+            } catch (error) {
+                console.error('Error resolving market for orderbook:', error);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        resolveMarket();
+    }, [marketSlug]);
+
+    // 2. Manage Socket.io connection
+    useEffect(() => {
         const socketUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-        socketRef.current = io(socketUrl, {
-            withCredentials: true,
-        });
+        const socket = io(socketUrl, { withCredentials: true });
+        socketRef.current = socket;
 
-        socketRef.current.on('connect', () => {
-            console.log('[LiveOrderbook] Connected to WebSocket');
+        socket.on('connect', () => {
             setIsConnected(true);
-
-            if (assetId) {
-                socketRef.current?.emit('subscribe:market', assetId);
+            if (tokenIdsRef.current) {
+                const ids = [tokenIdsRef.current.yes, tokenIdsRef.current.no];
+                socket.emit('subscribe:market', ids);
             }
         });
 
-        socketRef.current.on('disconnect', () => {
-            console.log('[LiveOrderbook] Disconnected');
-            setIsConnected(false);
-        });
+        socket.on('disconnect', () => setIsConnected(false));
 
-        socketRef.current.on('market:data', (data: OrderBookData) => {
-            if (data.asset_id === assetId) {
-                // Initial snapshot or update
-                // Note: Real implementation might need to handle incremental updates (price_change) vs snapshots
-                // For now assuming full book or merging logic handled by backend/simple replacement
-                if (data.bids && data.bids.length > 0) setBids(data.bids.slice(0, 15)); // Top 15
-                if (data.asks && data.asks.length > 0) setAsks(data.asks.slice(0, 15)); // Top 15
+        socket.on('market:data', (data: OrderBookData) => {
+            const currentIds = tokenIdsRef.current;
+            if (currentIds && (data.asset_id === currentIds.yes || data.asset_id === currentIds.no)) {
+                setOrderbooks(prev => ({
+                    ...prev,
+                    [data.asset_id]: { ...data }
+                }));
                 setLastUpdated(new Date());
             }
         });
 
         return () => {
-            if (assetId) {
-                socketRef.current?.emit('unsubscribe:market', assetId);
-            }
-            socketRef.current?.disconnect();
+            socket.disconnect();
         };
-    }, [assetId]);
+    }, []);
 
-    // Handle assetId changes
+    // 3. Handle Token Subscriptions on ID change
     useEffect(() => {
-        if (!socketRef.current || !isConnected || !assetId) return;
-
-        console.log(`[LiveOrderbook] Switching to asset: ${assetId}`);
-        socketRef.current.emit('subscribe:market', assetId);
-
-        return () => {
-            socketRef.current?.emit('unsubscribe:market', assetId);
-            setBids([]);
-            setAsks([]);
-        };
-    }, [assetId, isConnected]);
+        if (!socketRef.current || !isConnected || !tokenIds) return;
+        const ids = [tokenIds.yes, tokenIds.no];
+        socketRef.current.emit('subscribe:market', ids);
+    }, [tokenIds, isConnected]);
 
     const formatPrice = (price: string) => {
-        const num = parseFloat(price);
-        return num.toFixed(2); // Polymarket prices are usually 0.00-1.00 or similar
+        const val = parseFloat(price) * 100;
+        return `${val.toFixed(1)}¢`;
     };
 
     const formatSize = (size: string) => {
         const num = parseFloat(size);
-        return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
+        return num.toFixed(0);
+    };
+
+    // Current Market State
+    const currentTokenId = selectedOutcome === 'yes' ? tokenIds?.yes : tokenIds?.no;
+    const book = currentTokenId ? orderbooks[currentTokenId] : null;
+
+    // MANDATORY: Sort based on price to identify best levels
+    const sortedAsks = book?.asks ? [...book.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price)) : [];
+    const sortedBids = book?.bids ? [...book.bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price)) : [];
+
+    const bestAsk = sortedAsks[0]?.price;
+    const bestBid = sortedBids[0]?.price;
+
+    // Display Logic: 
+    // ASKS: High to Low (Best Ask at bottom of the list)
+    // BIDS: High to Low (Best Bid at top of the list)
+    const displayAsks = sortedAsks.slice(0, 8).reverse();
+    const displayBids = sortedBids.slice(0, 8);
+
+    const getBestPriceLabel = (side: 'yes' | 'no') => {
+        const id = side === 'yes' ? tokenIds?.yes : tokenIds?.no;
+        if (!id || !orderbooks[id]) return '--.-¢';
+        const b = orderbooks[id];
+        const asks = [...(b.asks || [])].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+        return asks[0] ? formatPrice(asks[0].price) : '--.-¢';
     };
 
     return (
-        <Card className="h-full w-full bg-slate-900 border-slate-800 flex flex-col">
-            <CardHeader className="py-3 px-4 border-b border-slate-800 flex flex-row items-center justify-between">
-                <CardTitle className="text-sm font-medium text-slate-200">
-                    Live Orderbook
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-                    <span className="text-xs text-slate-500">
-                        {lastUpdated ? lastUpdated.toLocaleTimeString() : 'Waiting...'}
-                    </span>
+        <Card className="h-full w-full bg-[#0f172a] border-[#1e293b] flex flex-col shadow-2xl overflow-hidden rounded-xl">
+            <CardHeader className="py-3 px-4 border-b border-[#1e293b] bg-[#0f172a]">
+                <div className="flex items-center justify-between mb-3">
+                    <CardTitle className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em]">
+                        Live Orderbook
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                        <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                        <span className="text-[10px] font-mono text-slate-500">
+                            {lastUpdated ? lastUpdated.toLocaleTimeString([], { hour12: false }) : 'SYNCING'}
+                        </span>
+                    </div>
+                </div>
+
+                <div className="flex p-1 bg-[#020617] rounded-lg border border-[#1e293b] gap-1">
+                    <button
+                        onClick={() => setSelectedOutcome('yes')}
+                        className={`flex-1 py-2 text-[10px] font-black rounded-md transition-all flex flex-col items-center leading-tight ${
+                            selectedOutcome === 'yes' 
+                            ? 'bg-blue-600 text-white shadow-lg' 
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                    >
+                        <span className="uppercase">{outcomes.yes}</span>
+                        <span className="text-[9px] opacity-70 font-mono mt-0.5">{getBestPriceLabel('yes')}</span>
+                    </button>
+                    <button
+                        onClick={() => setSelectedOutcome('no')}
+                        className={`flex-1 py-2 text-[10px] font-black rounded-md transition-all flex flex-col items-center leading-tight ${
+                            selectedOutcome === 'no' 
+                            ? 'bg-slate-800 text-white shadow-lg' 
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                    >
+                        <span className="uppercase">{outcomes.no}</span>
+                        <span className="text-[9px] opacity-70 font-mono mt-0.5">{getBestPriceLabel('no')}</span>
+                    </button>
                 </div>
             </CardHeader>
-            <CardContent className="flex-1 p-0 flex flex-col min-h-0">
-                {!assetId ? (
-                    <div className="flex-1 flex items-center justify-center text-slate-500 text-xs p-4">
-                        Select a market node to view orderbook
+
+            <CardContent className="flex-1 p-0 flex flex-col min-h-0 bg-[#020617]">
+                {isLoading ? (
+                    <div className="flex-1 flex items-center justify-center text-slate-500 text-[10px] font-bold uppercase tracking-widest animate-pulse">
+                        Resolving...
+                    </div>
+                ) : !marketSlug ? (
+                    <div className="flex-1 flex items-center justify-center text-slate-600 text-[10px] uppercase p-4 text-center leading-relaxed">
+                        Select a Market Node
                     </div>
                 ) : (
                     <>
-                        {/* Headers */}
-                        <div className="grid grid-cols-2 text-xs font-semibold text-slate-500 py-2 px-4 bg-slate-900/50">
-                            <div>BID SIZE</div>
-                            <div className="text-right">PRICE</div>
-                            {/* Combined header row for Asks below or split view? 
-                                Typically: Bid Size | Price | Ask Size 
-                                Or simpler: Bids Table / Asks Table 
-                                Let's do Bids (Green) / Asks (Red) vertically
-                            */}
+                        <div className="grid grid-cols-2 text-[9px] font-black text-slate-600 py-2 px-4 border-b border-[#0f172a] bg-[#0f172a]/30">
+                            <div className="tracking-widest">SIZE</div>
+                            <div className="text-right tracking-widest">PRICE</div>
                         </div>
 
                         <ScrollArea className="flex-1">
                             <div className="flex flex-col">
-                                {/* ASKS (Red, Sell orders) - Usually displayed top-down descending price or bottom-up ascending?
-                                    Standard vertical orderbook: 
-                                    ASKS (High -> Low) 
-                                    --- SPREAD ---
-                                    BIDS (High -> Low)
-                                */}
-                                <div className="flex flex-col-reverse">
-                                    {asks.map((ask, i) => (
-                                        <div key={i} className="grid grid-cols-3 text-xs py-1 px-4 hover:bg-slate-800/50 group">
-                                            {/* Standard Crypto View: Price | Size | Total? Let's stick to simple Price/Size */}
-                                            <div className="text-slate-400 text-right col-span-1">{formatSize(ask.size)}</div>
-                                            <div className="text-red-400 font-mono text-right col-span-1 mr-4">{formatPrice(ask.price)}</div>
-                                            {/* Spacer */}
-                                        </div>
-                                    ))}
-                                </div>
-
-                                {/* Spread Indicator */}
-                                {asks.length > 0 && bids.length > 0 && (
-                                    <div className="py-1 bg-slate-800 text-center text-xs text-slate-400 font-mono">
-                                        Spread: {(parseFloat(asks[0].price) - parseFloat(bids[0].price)).toFixed(3)}
+                                {/* ASKS */}
+                                {displayAsks.map((ask, i) => (
+                                    <div key={`ask-${i}`} className="grid grid-cols-2 text-[11px] py-1 px-4 hover:bg-rose-500/5 transition-colors relative font-mono">
+                                        <div className="absolute inset-y-0 right-0 bg-rose-500/[0.03] transition-all" style={{ width: `${Math.min(parseFloat(ask.size) / 1000, 100)}%` }} />
+                                        <div className="text-slate-500 z-10">{formatSize(ask.size)}</div>
+                                        <div className="text-rose-400 text-right z-10 font-bold">{formatPrice(ask.price)}</div>
                                     </div>
-                                )}
+                                ))}
 
-                                {/* BIDS (Green, Buy orders) */}
-                                <div className="flex flex-col">
-                                    {bids.map((bid, i) => (
-                                        <div key={i} className="grid grid-cols-3 text-xs py-1 px-4 hover:bg-slate-800/50 group">
-                                            <div className="text-slate-400 text-right col-span-1">{formatSize(bid.size)}</div>
-                                            <div className="text-green-400 font-mono text-right col-span-1 mr-4">{formatPrice(bid.price)}</div>
-                                        </div>
-                                    ))}
+                                {/* SPREAD */}
+                                <div className="py-1.5 bg-[#0f172a] border-y border-[#1e293b] flex justify-between px-4 items-center">
+                                    <span className="text-[9px] text-slate-500 font-black uppercase tracking-tighter">Spread</span>
+                                    <span className="text-[10px] font-mono text-slate-200 font-bold">
+                                        {bestAsk && bestBid ? ((parseFloat(bestAsk) - parseFloat(bestBid)) * 100).toFixed(1) : '0.0'}¢
+                                    </span>
                                 </div>
+
+                                {/* BIDS */}
+                                {displayBids.map((bid, i) => (
+                                    <div key={`bid-${i}`} className="grid grid-cols-2 text-[11px] py-1 px-4 hover:bg-emerald-500/5 transition-colors relative font-mono">
+                                        <div className="absolute inset-y-0 right-0 bg-emerald-500/[0.03] transition-all" style={{ width: `${Math.min(parseFloat(bid.size) / 1000, 100)}%` }} />
+                                        <div className="text-slate-500 z-10">{formatSize(bid.size)}</div>
+                                        <div className="text-emerald-400 text-right z-10 font-bold">{formatPrice(bid.price)}</div>
+                                    </div>
+                                ))}
                             </div>
                         </ScrollArea>
                     </>

@@ -4,8 +4,12 @@ import { useState } from 'react';
 import { HelpCircle, X, Search } from 'lucide-react';
 import { nodeDocumentation, canvasControls, type NodeDocumentation } from '@/lib/nodeDocumentation';
 
-export function HelpPanel() {
-    const [isOpen, setIsOpen] = useState(false);
+interface HelpPanelProps {
+    isOpen: boolean;
+    onToggle: (open: boolean) => void;
+}
+
+export function HelpPanel({ isOpen, onToggle }: HelpPanelProps) {
     const [activeTab, setActiveTab] = useState<'canvas' | 'nodes'>('canvas');
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -18,26 +22,26 @@ export function HelpPanel() {
     if (!isOpen) {
         return (
             <button
-                onClick={() => setIsOpen(true)}
-                className="fixed bottom-4 right-4 z-10 p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg transition-colors"
+                onClick={() => onToggle(true)}
+                className="p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-xl transition-all active:scale-95 border border-blue-400/30 ring-1 ring-blue-900/20 group"
                 title="Show help"
             >
-                <HelpCircle className="w-5 h-5" />
+                <HelpCircle className="w-5 h-5 group-hover:rotate-12 transition-transform" />
             </button>
         );
     }
 
     return (
-        <div className="fixed bottom-4 right-4 z-10 w-96 bg-slate-800 rounded-lg shadow-2xl border border-slate-700 overflow-hidden">
+        <div className="w-96 bg-[#0f172a] rounded-2xl shadow-2xl border border-[#1e293b] overflow-hidden flex flex-col max-h-[600px]">
             {/* Header */}
-            <div className="bg-slate-900 px-4 py-3 flex items-center justify-between border-b border-slate-700">
-                <h3 className="text-white font-semibold flex items-center gap-2">
-                    <HelpCircle className="w-4 h-4" />
-                    Quick Help
+            <div className="bg-[#1e293b]/50 px-4 py-3.5 flex items-center justify-between border-b border-[#1e293b]">
+                <h3 className="text-white font-bold text-xs uppercase tracking-widest flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4 text-blue-400" />
+                    Quick Guide
                 </h3>
                 <button
-                    onClick={() => setIsOpen(false)}
-                    className="p-1 hover:bg-slate-700 rounded transition-colors"
+                    onClick={() => onToggle(false)}
+                    className="p-1 hover:bg-slate-700 rounded-lg transition-colors"
                 >
                     <X className="w-4 h-4 text-slate-400" />
                 </button>

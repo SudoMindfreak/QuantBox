@@ -3,9 +3,26 @@ import { cors } from 'hono/cors';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
 import { OrderbookStream } from 'quantbox-core/dist/engine/stream.js';
+import { MarketService } from 'quantbox-core/dist/services/MarketService.js';
+import { MarketResolver } from 'quantbox-core/dist/services/MarketResolver.js';
+import { ClobClient } from '@polymarket/clob-client';
 import 'dotenv/config';
 
 const app = new Hono();
+
+// Initialize Polymarket Services
+const POLYMARKET_HOST = 'https://clob.polymarket.com';
+const POLYGON_CHAIN_ID = 137;
+
+const clobClient = new ClobClient(
+    POLYMARKET_HOST,
+    POLYGON_CHAIN_ID,
+    undefined,
+    { key: '', secret: '', passphrase: '' }
+);
+
+const marketService = new MarketService(clobClient);
+const marketResolver = new MarketResolver(clobClient);
 
 // CORS middleware
 app.use('/*', cors({
@@ -19,9 +36,48 @@ app.get('/health', (c) => {
 });
 
 // API routes
+app.get('/api/markets/resolve', async (c) => {
+    try {
+        const input = c.req.query('input');
+        if (!input) {
+            return c.json({ error: 'Missing input parameter' }, 400);
+        }
+
+        console.log(`[API] Resolving market: ${input}`);
+        const metadata = await marketResolver.resolve(input);
+        const fullMarket = await marketService.getMarketByConditionId(metadata.condition_id);
+        const tokenIds = marketService.extractTokenIds(fullMarket);
+
+        console.log(`[API] Resolved to: ${metadata.question} (${tokenIds.yes})`);
+
+        return c.json({
+            ...metadata,
+            tokens: fullMarket.tokens,
+            tokenIds
+        });
+    } catch (error) {
+        console.error('Error resolving market:', error);
+        return c.json({ error: 'Failed to resolve market' }, 500);
+    }
+});
+
 app.get('/api/strategies', async (c) => {
-    // TODO: Fetch all strategies from database
-    return c.json([]);
+    try {
+        const { db } = await import('./db/index.js');
+        const { strategies } = await import('./db/schema.js');
+        const { desc } = await import('drizzle-orm');
+
+        const allStrategies = await db.select().from(strategies).orderBy(desc(strategies.updatedAt));
+        
+        return c.json(allStrategies.map(s => ({
+            ...s,
+            nodes: JSON.parse(s.nodes as string),
+            edges: JSON.parse(s.edges as string),
+        })));
+    } catch (error) {
+        console.error('Error fetching strategies:', error);
+        return c.json({ error: 'Failed to fetch strategies' }, 500);
+    }
 });
 
 app.post('/api/strategies', async (c) => {
@@ -117,6 +173,22 @@ app.put('/api/strategies/:id', async (c) => {
     }
 });
 
+app.delete('/api/strategies/:id', async (c) => {
+    try {
+        const id = c.req.param('id');
+        const { db } = await import('./db/index.js');
+        const { strategies } = await import('./db/schema.js');
+        const { eq } = await import('drizzle-orm');
+
+        await db.delete(strategies).where(eq(strategies.id, id));
+
+        return c.json({ success: true, id });
+    } catch (error) {
+        console.error('Error deleting strategy:', error);
+        return c.json({ error: 'Failed to delete strategy' }, 500);
+    }
+});
+
 // Active strategy runners
 const activeRunners = new Map<string, any>();
 
@@ -139,12 +211,7 @@ app.post('/api/strategies/:id/start', async (c) => {
             return c.json({ error: 'Strategy not found' }, 404);
         }
 
-        const strategyData = {
-            nodes: JSON.parse(strategy.nodes as string),
-            edges: JSON.parse(strategy.edges as string),
-        };
-
-        const runner = new StrategyRunner(id, strategyData, io, stream);
+        const runner = new StrategyRunner(id, strategy, io, stream, marketResolver, marketService);
         await runner.start();
         activeRunners.set(id, runner);
 
@@ -222,7 +289,7 @@ stream.connect().catch(err => {
 });
 
 // Forward Orderbook events to Socket.io clients
-stream.on('data', (data: any) => {
+stream.on('orderbook', (data: any) => {
     // Broadcast to specific room for this asset
     if (data.asset_id) {
         io.to(`market:${data.asset_id}`).emit('market:data', data);
@@ -243,18 +310,21 @@ io.on('connection', (socket) => {
     });
 
     // Handle market data subscriptions
-    socket.on('subscribe:market', (assetId: string) => {
-        console.log(`[WebSocket] Client ${socket.id} subscribed to market: ${assetId}`);
-        socket.join(`market:${assetId}`);
+    socket.on('subscribe:market', (assetIds: string | string[]) => {
+        const ids = Array.isArray(assetIds) ? assetIds : [assetIds];
+        console.log(`[WebSocket] Client ${socket.id} subscribed to markets: ${ids.join(', ')}`);
+        
+        ids.forEach(id => socket.join(`market:${id}`));
 
-        // Tell the stream to subscribe to this asset if not already
-        stream.subscribe([assetId]);
+        // Tell the stream to subscribe to these assets
+        stream.subscribe(ids);
     });
 
-    socket.on('unsubscribe:market', (assetId: string) => {
-        console.log(`[WebSocket] Client ${socket.id} unsubscribed from market: ${assetId}`);
-        socket.leave(`market:${assetId}`);
-        // Note: We don't unsubscribe the stream itself because other clients might be listening
+    socket.on('unsubscribe:market', (assetIds: string | string[]) => {
+        const ids = Array.isArray(assetIds) ? assetIds : [assetIds];
+        console.log(`[WebSocket] Client ${socket.id} unsubscribed from markets: ${ids.join(', ')}`);
+        
+        ids.forEach(id => socket.leave(`market:${id}`));
     });
 
     socket.on('disconnect', () => {

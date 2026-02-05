@@ -1,11 +1,18 @@
 import { MarketMetadata } from '../types/polymarket';
 
 /**
- * Market Type Enum - Simplified for 15min focus
+ * Market Timeframe Categories
+ */
+export type MarketTimeframe = '15m' | '1h' | '4h' | 'one-off';
+
+/**
+ * Market Type Enum
  */
 export enum MarketType {
-    ROLLING_15MIN = 'rolling_15min',  // Primary market type
-    ONE_OFF = 'one_off'                // Fallback for non-rolling markets
+    ROLLING_15MIN = 'rolling_15m',
+    ROLLING_1H = 'rolling_1h',
+    ROLLING_4H = 'rolling_4h',
+    ONE_OFF = 'one_off'
 }
 
 /**
@@ -13,86 +20,77 @@ export enum MarketType {
  */
 export interface MarketPattern {
     type: MarketType;
+    timeframe: MarketTimeframe;
     baseSlug: string;
     isDiscoverable: boolean;
 }
 
 /**
  * MarketTypeDetector - Detects market types and extracts base slugs
- * 
- * Primary focus: 15-minute rolling markets (btc-updown-15m-*)
  */
 export class MarketTypeDetector {
-    // Pattern for 15-minute rolling markets: <base>-15m-<unix_timestamp>
-    private readonly ROLLING_15MIN_PATTERN = /^(.+)-15m-\d{10}$/i;
+    // Patterns for rolling markets: <base>-<timeframe>-<unix_timestamp>
+    private readonly PATTERNS = {
+        '15m': /^(.+)-15m-\d{10}$/i,
+        '1h': /^(.+)-1h-\d{10}$/i,
+        '4h': /^(.+)-4h-\d{10}$/i,
+    };
 
     /**
-     * Detect market type from slug
-     * 
-     * @param slug - Market slug to analyze
-     * @returns Market pattern with type and base slug
-     * 
-     * @example
-     * detectType('btc-updown-15m-1770273000')
-     * // Returns: { type: ROLLING_15MIN, baseSlug: 'btc-updown-15m', isDiscoverable: true }
-     * 
-     * detectType('who-will-trump-nominate-as-fed-chair')
-     * // Returns: { type: ONE_OFF, baseSlug: 'who-will-trump-nominate-as-fed-chair', isDiscoverable: false }
+     * Detect market type from slug or URL
      */
-    detectType(slug: string): MarketPattern {
-        // Check for 15-minute rolling market pattern
-        const match = slug.match(this.ROLLING_15MIN_PATTERN);
-
-        if (match) {
-            const baseSlug = match[1] + '-15m'; // e.g., 'btc-updown-15m'
-
-            return {
-                type: MarketType.ROLLING_15MIN,
-                baseSlug,
-                isDiscoverable: true
-            };
+    detectType(input: string): MarketPattern {
+        // Clean input: remove URL prefix if present
+        let slug = input.trim();
+        if (slug.includes('/event/')) {
+            slug = slug.split('/event/').pop()?.split('?')[0] || slug;
         }
 
-        // Default: one-off market (not discoverable)
+        for (const [tf, regex] of Object.entries(this.PATTERNS)) {
+            const match = slug.match(regex);
+            if (match) {
+                return {
+                    type: this.tfToType(tf as MarketTimeframe),
+                    timeframe: tf as MarketTimeframe,
+                    baseSlug: `${match[1]}-${tf}`,
+                    isDiscoverable: true
+                };
+            }
+        }
+
+        // Special case: if slug ends with timeframe but no timestamp
+        for (const tf of ['15m', '1h', '4h']) {
+            if (slug.endsWith(`-${tf}`)) {
+                return {
+                    type: this.tfToType(tf as MarketTimeframe),
+                    timeframe: tf as MarketTimeframe,
+                    baseSlug: slug,
+                    isDiscoverable: true
+                };
+            }
+        }
+
         return {
             type: MarketType.ONE_OFF,
+            timeframe: 'one-off',
             baseSlug: slug,
             isDiscoverable: false
         };
     }
 
-    /**
-     * Check if a slug matches the 15-minute rolling pattern
-     * 
-     * @param slug - Slug to check
-     * @returns True if matches 15min pattern
-     */
-    is15MinRollingMarket(slug: string): boolean {
-        return this.ROLLING_15MIN_PATTERN.test(slug);
+    private tfToType(tf: MarketTimeframe): MarketType {
+        switch (tf) {
+            case '15m': return MarketType.ROLLING_15MIN;
+            case '1h': return MarketType.ROLLING_1H;
+            case '4h': return MarketType.ROLLING_4H;
+            default: return MarketType.ONE_OFF;
+        }
     }
 
     /**
-     * Extract base slug from a 15-minute market slug
-     * 
-     * @param slug - Full market slug
-     * @returns Base slug without timestamp, or original slug if not 15min market
-     * 
-     * @example
-     * extractBaseSlug('btc-updown-15m-1770273000') // 'btc-updown-15m'
-     * extractBaseSlug('eth-updown-15m-1770274800') // 'eth-updown-15m'
+     * Extract base slug from any market slug
      */
     extractBaseSlug(slug: string): string {
-        const pattern = this.detectType(slug);
-        return pattern.baseSlug;
-    }
-
-    /**
-     * Validate if a slug is a valid base slug for 15min markets
-     * 
-     * @param baseSlug - Base slug to validate
-     * @returns True if valid base slug (ends with '-15m')
-     */
-    isValidBaseSlug(baseSlug: string): boolean {
-        return baseSlug.endsWith('-15m');
+        return this.detectType(slug).baseSlug;
     }
 }

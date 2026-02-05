@@ -180,6 +180,49 @@ export const nodeDocumentation: Record<string, NodeDocumentation> = {
         config: {},
         example: 'Combine orderbook data and price data for analysis',
     },
+    // Specialized Up/Down Timeframe Nodes
+    upDownClock: {
+        name: 'Timeframe Clock',
+        category: 'Data',
+        description: 'Monitors the current market timeframe (15m, 1h, or 4h). Outputs time remaining and current phase.',
+        inputs: [],
+        outputs: [
+            { name: 'Seconds Left', type: 'number' },
+            { name: 'Phase', type: 'string' }
+        ],
+        config: {},
+        example: 'Trigger a sell only when there are less than 2 minutes left in the 1-hour candle.',
+    },
+    upDownStrike: {
+        name: 'Strike Price',
+        category: 'Data',
+        description: 'Fetches the opening price (Strike Price) of the current timeframe candle.',
+        inputs: [],
+        outputs: [
+            { name: 'Strike Price', type: 'number' },
+            { name: 'Current Spot', type: 'number' },
+            { name: 'Distance', type: 'number' }
+        ],
+        config: {},
+        example: 'Compare current asset price to the strike price to determine market direction.',
+    },
+    binaryArbitrage: {
+        name: 'Binary Arbitrage',
+        category: 'Conditions',
+        description: 'Calculates the spread between YES and NO tokens. Ideally, YES + NO = $1.00. Triggers if they deviate significantly.',
+        inputs: [
+            { name: 'YES Price', type: 'number' },
+            { name: 'NO Price', type: 'number' }
+        ],
+        outputs: [
+            { name: 'Arb Signal', type: 'signal' },
+            { name: 'Deviation', type: 'number' }
+        ],
+        config: {
+            threshold: 'Minimum deviation to trigger (e.g., 0.02 for $0.02 spread)',
+        },
+        example: 'If YES($0.40) + NO($0.55) = $0.95, buy both for a guaranteed $0.05 profit at resolution.',
+    },
 };
 
 export const canvasControls = {
