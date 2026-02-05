@@ -262,4 +262,84 @@ export class MarketResolver {
     private sleep(ms: number): Promise<void> {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
+
+    /**
+     * Resolve market from base slug (for 15-minute rolling markets)
+     * 
+     * @param baseSlug - Base slug without timestamp (e.g., 'btc-updown-15m')
+     * @returns Current active market instance
+     */
+    async resolveFromBaseSlug(baseSlug: string): Promise<MarketMetadata> {
+        // For 15min markets (base slug ends with '-15m')
+        if (baseSlug.endsWith('-15m')) {
+            console.log(`🔍 Searching for current 15min market: ${baseSlug}-*`);
+            return await this.findCurrent15MinMarket(baseSlug);
+        }
+
+        // Fallback to regular resolution (one-off markets)
+        console.log(`🔍 Treating as one-off market: ${baseSlug}`);
+        return await this.resolve(baseSlug);
+    }
+
+    /**
+     * Find the current active 15-minute rolling market
+     * 
+     * @param baseSlug - Base slug (e.g., 'btc-updown-15m')
+     * @returns Market with the nearest end time (most current instance)
+     */
+    private async findCurrent15MinMarket(baseSlug: string): Promise<MarketMetadata> {
+        try {
+            // Fetch active events from Gamma API
+            const response = await axios.get(`${this.gammaApiBase}/events`, {
+                params: {
+                    active: true,
+                    limit: 50,
+                    offset: 0
+                }
+            });
+
+            if (!response.data || !Array.isArray(response.data)) {
+                throw new Error('Invalid response from Gamma API');
+            }
+
+            // Pattern to match: <baseSlug>-<10-digit-unix-timestamp>
+            const pattern = new RegExp(`^${this.escapeRegExp(baseSlug)}-\\d{10}$`);
+
+            // Filter for matching 15min markets
+            const matchingEvents = response.data.filter((event: GammaEvent) => {
+                return pattern.test(event.slug) && event.active && !event.closed;
+            });
+
+            if (matchingEvents.length === 0) {
+                throw new Error(`No active 15min markets found for base slug: ${baseSlug}`);
+            }
+
+            // Sort by end time (earliest = current instance)
+            const sorted = matchingEvents.sort((a: GammaEvent, b: GammaEvent) => {
+                const aTime = new Date(a.end_date_iso || a.markets[0]?.endDate).getTime();
+                const bTime = new Date(b.end_date_iso || b.markets[0]?.endDate).getTime();
+                return aTime - bTime;
+            });
+
+            const currentEvent = sorted[0];
+            console.log(`✅ Found current 15min market: ${currentEvent.slug}`);
+            console.log(`   End time: ${currentEvent.end_date_iso || currentEvent.markets[0]?.endDate}`);
+
+            // Use existing resolve logic
+            return await this.resolve(currentEvent.slug);
+
+        } catch (error) {
+            if (axios.isAxiosError(error)) {
+                throw new Error(`Failed to search Gamma API: ${error.message}`);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Escape special regex characters
+     */
+    private escapeRegExp(str: string): string {
+        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
 }

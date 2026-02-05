@@ -110,7 +110,12 @@ export class OrderbookStream extends EventEmitter {
      */
     private handleMessage(data: WebSocket.Data): void {
         try {
-            const message: OrderBookMessage = JSON.parse(data.toString());
+            const msgString = data.toString();
+            if (msgString.includes('INVALID') || !msgString.startsWith('{') && !msgString.startsWith('[')) {
+                console.warn(`[Polymarket WS] Ignored non-JSON message: ${msgString}`);
+                return;
+            }
+            const message: OrderBookMessage = JSON.parse(msgString);
 
             // Emit different events based on message type
             if (message.event_type === 'book') {
@@ -159,6 +164,16 @@ export class OrderbookStream extends EventEmitter {
         // Note: Polymarket WebSocket API doesn't have explicit unsubscribe
         // So we just remove from our tracking set
         console.log(`🔕 Unsubscribed from ${tokenIds.length} token(s)`);
+    }
+
+    /**
+     * Switch subscription from old tokens to new tokens
+     * Convenience method for market transitions
+     */
+    switchSubscription(oldTokenIds: string[], newTokenIds: string[]): void {
+        console.log(`🔄 Switching subscriptions...`);
+        this.unsubscribe(oldTokenIds);
+        this.subscribe(newTokenIds);
     }
 
     /**

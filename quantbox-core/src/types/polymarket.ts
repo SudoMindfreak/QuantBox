@@ -129,3 +129,52 @@ export interface MarketSearchParams {
     limit?: number;
     offset?: number;
 }
+
+/**
+ * Phase 3: Auto-Discovery Event Types
+ */
+
+// Market lifecycle events
+export type MarketEvent =
+    | 'market:detected'
+    | 'market:active'
+    | 'market:expiring'
+    | 'market:expired'
+    | 'error';
+
+// Event payload for market transitions
+export interface MarketTransitionEvent {
+    previousMarket?: MarketMetadata;
+    currentMarket: MarketMetadata;
+    timestamp: number;
+    timeUntilExpiry?: number;
+}
+
+// Error event payload
+export interface PollingErrorEvent {
+    error: Error;
+    consecutiveFailures: number;
+    nextRetryIn?: number;
+    fatal: boolean;
+}
+
+/**
+ * Phase 3.5: Market Type Detection
+ */
+
+// Market types (simplified - 15min focus)
+export enum MarketType {
+    ROLLING_15MIN = 'rolling_15min',  // Primary market type
+    ONE_OFF = 'one_off'                // Fallback for non-rolling markets
+}
+
+// Market pattern detection result
+export interface MarketPattern {
+    type: MarketType;
+    baseSlug: string;
+    isDiscoverable: boolean;
+}
+
+// Market mode configuration
+export type MarketMode = 'rolling' | 'one-off' | 'auto';
+

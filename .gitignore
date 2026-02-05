@@ -1,4 +1,23 @@
-quantbox-core/node_modules/
-quantbox-core/dist/
+# Dependencies
+node_modules/
+
+# Environment
 .env
+.env.local
+
+# Build outputs
+dist/
+.next/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+drizzle/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
 .DS_Store
