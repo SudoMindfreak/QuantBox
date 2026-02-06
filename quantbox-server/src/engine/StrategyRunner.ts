@@ -36,13 +36,14 @@ export class StrategyRunner extends EventEmitter {
     private currentMarketMetadata: Map<string, MarketMetadata> = new Map();
     private subscribedAssets: Set<string> = new Set();
     private latestOrderbooks: Map<string, OrderBookMessage> = new Map();
-    
+
     // Strategy Memory State
     private nodeMemory: Map<string, any> = new Map();
     private strikePrices: Map<string, number> = new Map();
     private volatilityThresholds: Map<string, number> = new Map();
     private lastEvaluationLog: Map<string, number> = new Map();
     private nodeCooldowns: Map<string, number> = new Map();
+    private pendingStrikeLookups: Set<string> = new Set();
 
     // Side Tracking
     private bull_id: string | null = null;
@@ -83,7 +84,7 @@ export class StrategyRunner extends EventEmitter {
 
         this.log('📡 Waiting for market data pulse...');
         this.stream.on('orderbook', this.handleMarketData);
-        
+
         this.binance.on('price', (data: any) => {
             if (!this.active) return;
             const detectors = Array.from(this.nodes.values()).filter(n => n.type === 'marketDetector');
@@ -120,12 +121,12 @@ export class StrategyRunner extends EventEmitter {
 
     private async settlePositions(previousMarket: MarketMetadata) {
         this.log(`🏁 Settling expired market: ${previousMarket.question}`, 'info');
-        
+
         // In simulation, we determine the winner based on the spot price vs strike price 
         // because the API winner might not be available yet.
         const symbol = 'BTCUSDT';
         const spot = this.binance.getCurrentPrice(symbol);
-        
+
         // Find the strike price for the detector node that was watching this market
         let strike = 0;
         for (const s of this.strikePrices.values()) strike = s;
@@ -133,7 +134,7 @@ export class StrategyRunner extends EventEmitter {
         if (spot && strike) {
             const winnerId = spot > strike ? this.bull_id : this.bear_id;
             const winnerLabel = spot > strike ? 'UP' : 'DOWN';
-            
+
             this.log(`🏆 Market Result: ${winnerLabel} (Spot $${spot.toFixed(2)} vs Strike $${strike.toFixed(2)})`, 'success');
 
             const positions = this.wallet.getAllPositions();
@@ -164,7 +165,7 @@ export class StrategyRunner extends EventEmitter {
                 orchestrator.on('market:detected', async (event: MarketTransitionEvent) => {
                     clearTimeout(timeout);
                     const { currentMarket, previousMarket } = event;
-                    
+
                     if (previousMarket) {
                         await this.settlePositions(previousMarket);
                         this.log(`♻️ Rollover to "${currentMarket.question}"`, 'info');
@@ -173,6 +174,7 @@ export class StrategyRunner extends EventEmitter {
                         this.latestOrderbooks.clear();
                         this.strikePrices.clear();
                         this.volatilityThresholds.clear();
+                        this.pendingStrikeLookups.clear();
                     }
 
                     const fullMarket = await this.marketService.getMarketByConditionId(currentMarket.condition_id);
@@ -220,7 +222,7 @@ export class StrategyRunner extends EventEmitter {
         const lastExec = this.nodeCooldowns.get(nodeId) || 0;
         // Entry nodes (Actions) have a 30s cooldown to prevent spam
         if ((node.type === 'buyAction' || node.type === 'sellAction') && (now - lastExec < 30000)) {
-            return; 
+            return;
         }
 
         this.emitNodeStatus(nodeId, 'running');
@@ -242,14 +244,14 @@ export class StrategyRunner extends EventEmitter {
                     const { ratio, outcome } = node.data;
                     const targetOutcome = outcome || 'UP';
                     const targetAssetId = targetOutcome === 'UP' ? this.bull_id : this.bear_id;
-                    
+
                     if (!targetAssetId) { shouldContinue = false; break; }
                     const targetOb = this.latestOrderbooks.get(targetAssetId);
                     if (!targetOb) { shouldContinue = false; break; }
 
                     const sBids = [...targetOb.bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
                     const sAsks = [...targetOb.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
-                    
+
                     if (sBids.length === 0 || sAsks.length === 0) { shouldContinue = false; break; }
 
                     const bidVol = sBids.slice(0, 5).reduce((acc: number, b: any) => acc + parseFloat(b.size), 0);
@@ -260,12 +262,12 @@ export class StrategyRunner extends EventEmitter {
 
                     shouldContinue = currentRatio >= imbThreshold;
                     if (shouldContinue) {
-                        outputData = { 
-                            ...outputData, 
+                        outputData = {
+                            ...outputData,
                             assetId: targetAssetId,
-                            currentRatio, 
-                            bestAsk: sAsks[0].price, 
-                            bestBid: sBids[0].price 
+                            currentRatio,
+                            bestAsk: sAsks[0].price,
+                            bestBid: sBids[0].price
                         };
                     }
                     break;
@@ -274,7 +276,7 @@ export class StrategyRunner extends EventEmitter {
                     const buyQty = node.data.quantity || 5;
                     const buyOutcome = node.data.outcome || 'UP';
                     const buyAssetId = buyOutcome === 'UP' ? this.bull_id : this.bear_id;
-                    
+
                     if (!buyAssetId) { shouldContinue = false; break; }
                     const obBuy = this.latestOrderbooks.get(buyAssetId);
                     const metaBuy = this.currentMarketMetadata.get(buyAssetId);
@@ -326,7 +328,7 @@ export class StrategyRunner extends EventEmitter {
                     const targetOutcomeL = node.data.outcome || 'UP';
                     const targetId = targetOutcomeL === 'UP' ? this.bull_id : this.bear_id;
                     const targetObLog = targetId ? this.latestOrderbooks.get(targetId) : null;
-                    
+
                     let cents = 'N/A';
                     if (targetObLog) {
                         const sAsks = [...targetObLog.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
@@ -341,31 +343,54 @@ export class StrategyRunner extends EventEmitter {
                     const k = parseFloat(node.data.volatilityK) || 0.6;
                     const minDiff = parseFloat(node.data.minDiff) || 2.0;
                     const spot = this.binance.getCurrentPrice(symbol);
-                    
-                    if (!spot) { 
+
+                    if (!spot) {
                         const subKey = `waiting_price_${symbol}`;
                         if (!this.nodeMemory.get(subKey)) {
                             this.log(`📡 Connecting to live data feed for ${symbol}...`);
                             this.binance.subscribePrice(symbol);
                             this.nodeMemory.set(subKey, true);
                         }
-                        shouldContinue = false; 
-                        break; 
+                        shouldContinue = false;
+                        break;
                     }
 
                     const metadata = Array.from(this.currentMarketMetadata.values())[0];
                     if (!metadata) { shouldContinue = false; break; }
                     const marketStart = new Date(metadata.end_date_iso).getTime() - (900 * 1000);
-                    
+
                     if (!this.strikePrices.has(node.id)) {
-                        const strike = await this.binance.getStrikePrice(symbol, marketStart);
-                        const prevRange = await this.binance.getPreviousRange(symbol);
-                        if (strike && prevRange) {
-                            this.strikePrices.set(node.id, strike);
-                            const threshold = Math.max(prevRange.range * k, minDiff);
-                            this.volatilityThresholds.set(node.id, threshold);
-                            this.log(`🎯 Strike Locked: $${strike.toFixed(2)} | Trigger Gap: ±$${threshold.toFixed(2)}`, 'success');
-                        } else { shouldContinue = false; break; }
+                        if (this.pendingStrikeLookups.has(node.id)) {
+                            shouldContinue = false;
+                            break;
+                        }
+
+                        this.pendingStrikeLookups.add(node.id);
+                        try {
+                            const strike = await this.binance.getStrikePrice(symbol, marketStart);
+                            const prevRange = await this.binance.getPreviousRange(symbol);
+
+                            if (strike && prevRange) {
+                                this.strikePrices.set(node.id, strike);
+                                const threshold = Math.max(prevRange.range * k, minDiff);
+                                this.volatilityThresholds.set(node.id, threshold);
+                                this.log(`🎯 Strike Locked: $${strike.toFixed(2)} | Trigger Gap: ±$${threshold.toFixed(2)}`, 'success');
+                            } else {
+                                shouldContinue = false;
+                            }
+                        } finally {
+                            this.pendingStrikeLookups.delete(node.id);
+                        }
+
+                        // If we failed to get strike (and thus didn't set it), or just finished setting it,
+                        // we shouldn't continue to logic below immediately in this pass if we want to be strict,
+                        // but actually if we just set it, we CAN continue. 
+                        // However, simpler to break and let next tick handle it if we want to be safe, 
+                        // OR just check if it was set.
+                        if (!this.strikePrices.has(node.id)) {
+                            shouldContinue = false;
+                            break;
+                        }
                     }
 
                     const strikePrice = this.strikePrices.get(node.id)!;
@@ -410,8 +435,8 @@ export class StrategyRunner extends EventEmitter {
                 case 'priceChange':
                     const valA = inputData.a || 0;
                     const valB = inputData.b || 0;
-                    const result = (node.data.mode || 'percentage') === 'percentage' 
-                        ? (valB !== 0 ? ((valA - valB) / valB) * 100 : 0) 
+                    const result = (node.data.mode || 'percentage') === 'percentage'
+                        ? (valB !== 0 ? ((valA - valB) / valB) * 100 : 0)
                         : valA - valB;
                     outputData = { ...inputData, change: result };
                     break;
