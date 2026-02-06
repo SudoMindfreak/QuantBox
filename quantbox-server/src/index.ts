@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { serve } from '@hono/node-server';
 import { Server } from 'socket.io';
-import { createServer } from 'http';
 import { OrderbookStream } from 'quantbox-core/dist/engine/stream.js';
 import { MarketService } from 'quantbox-core/dist/services/MarketService.js';
 import { MarketResolver } from 'quantbox-core/dist/services/MarketResolver.js';
+import { BinanceService } from 'quantbox-core/dist/services/BinanceService.js';
 import { ClobClient } from '@polymarket/clob-client';
 import 'dotenv/config';
 
@@ -23,6 +24,7 @@ const clobClient = new ClobClient(
 
 const marketService = new MarketService(clobClient);
 const marketResolver = new MarketResolver(clobClient);
+const binanceService = new BinanceService();
 
 // CORS middleware
 app.use('/*', cors({
@@ -82,15 +84,7 @@ app.get('/api/strategies', async (c) => {
 
 app.post('/api/strategies', async (c) => {
     try {
-        console.log('[POST /api/strategies] Request received');
-        console.log('[POST /api/strategies] Content-Type:', c.req.header('Content-Type'));
-
-
-        const rawBody = await c.req.text();
-        console.log('[POST /api/strategies] Raw body:', rawBody);
-        const body = JSON.parse(rawBody);
-        console.log('[POST /api/strategies] Parsed body:', JSON.stringify(body, null, 2));
-
+        const body = await c.req.json();
         const { db } = await import('./db/index.js');
         const { strategies } = await import('./db/schema.js');
         const { randomUUID } = await import('crypto');
@@ -109,15 +103,11 @@ app.post('/api/strategies', async (c) => {
             lastExecutedAt: null,
         };
 
-        console.log('[POST /api/strategies] Inserting strategy:', strategy.id);
         await db.insert(strategies).values(strategy);
-        console.log('[POST /api/strategies] Strategy created successfully');
-
         return c.json(strategy);
     } catch (error) {
-        console.error('[POST /api/strategies] Error creating strategy:', error);
-        console.error('[POST /api/strategies] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-        return c.json({ error: 'Failed to create strategy', details: error instanceof Error ? error.message : String(error) }, 500);
+        console.error('Error creating strategy:', error);
+        return c.json({ error: 'Failed to create strategy' }, 500);
     }
 });
 
@@ -189,6 +179,22 @@ app.delete('/api/strategies/:id', async (c) => {
     }
 });
 
+app.post('/api/ai/generate', async (c) => {
+    try {
+        const { prompt, context } = await c.req.json();
+        const userKey = c.req.header('x-ai-key');
+        const provider = c.req.header('x-ai-provider') || 'openai';
+        
+        const { generateStrategy } = await import('./services/AIService.js');
+        const result = await generateStrategy(prompt, context, provider, userKey);
+        
+        return c.json(result);
+    } catch (error) {
+        console.error('AI Generation Error:', error);
+        return c.json({ error: 'Failed to generate strategy' }, 500);
+    }
+});
+
 // Active strategy runners
 const activeRunners = new Map<string, any>();
 
@@ -211,7 +217,7 @@ app.post('/api/strategies/:id/start', async (c) => {
             return c.json({ error: 'Strategy not found' }, 404);
         }
 
-        const runner = new StrategyRunner(id, strategy, io, stream, marketResolver, marketService);
+        const runner = new StrategyRunner(id, strategy, io, stream, marketResolver, marketService, binanceService);
         await runner.start();
         activeRunners.set(id, runner);
 
@@ -237,43 +243,16 @@ app.post('/api/strategies/:id/stop', async (c) => {
 
 const port = parseInt(process.env.PORT || '3001');
 
-// Create HTTP server for Socket.io
-const server = createServer(async (req, res) => {
-    // Read request body for POST/PUT/PATCH
-    let body: string | undefined;
-    if (req.method && ['POST', 'PUT', 'PATCH'].includes(req.method)) {
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) {
-            chunks.push(chunk);
-        }
-        body = Buffer.concat(chunks).toString('utf-8');
-    }
-
-    // Handle Hono app requests
-    const response = await app.fetch(new Request(`http://localhost:${port}${req.url}`, {
-        method: req.method,
-        headers: req.headers as any,
-        body: body,
-    }));
-
-    res.statusCode = response.status;
-    response.headers.forEach((value, key) => {
-        res.setHeader(key, value);
-    });
-
-    if (response.body) {
-        const reader = response.body.getReader();
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-        }
-    }
-    res.end();
+// Initialize Hono Server with standard node-server
+const server = serve({
+    fetch: app.fetch,
+    port
+}, (info) => {
+    console.log(`✅ Server running on http://localhost:${info.port}`);
 });
 
-// WebSocket server
-const io = new Server(server, {
+// Attach WebSocket server to the HTTP server
+const io = new Server(server as any, {
     cors: {
         origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
         credentials: true,
@@ -330,11 +309,6 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         console.log(`[WebSocket] Client disconnected: ${socket.id}`);
     });
-});
-
-server.listen(port, () => {
-    console.log(`✅ Server running on http://localhost:${port}`);
-    console.log(`✅ WebSocket server ready`);
 });
 
 // Graceful shutdown

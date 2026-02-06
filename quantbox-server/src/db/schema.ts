@@ -15,6 +15,7 @@ export const strategies = sqliteTable('strategies', {
 
     // Status
     status: text('status').notNull().default('draft'), // draft | active | paused | stopped
+    isTemplate: integer('is_template', { mode: 'boolean' }).notNull().default(false),
 
     // Timestamps
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),

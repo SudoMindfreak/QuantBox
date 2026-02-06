@@ -1,10 +1,19 @@
 'use client';
 
-import { Radio, TrendingUp, ShoppingCart, DollarSign, GitBranch, Calculator, Zap, Bitcoin, ChevronDown, Clock } from 'lucide-react';
+import { Radio, TrendingUp, ShoppingCart, DollarSign, GitBranch, Calculator, Zap, Bitcoin, ChevronDown, Clock, Shield } from 'lucide-react';
 
 export type MarketContext = 'generic' | '15m' | '1h' | '4h';
 
 const commonCategories = [
+    {
+        name: 'Strategies',
+        icon: Zap,
+        color: 'text-purple-400',
+        nodes: [
+            { type: 'strikeMomentum', label: 'Strike Momentum', icon: '🌊' },
+            { type: 'positionManager', label: 'Position Manager', icon: '🛡️' },
+        ],
+    },
     {
         name: 'Triggers',
         icon: Radio,
@@ -31,6 +40,16 @@ const commonCategories = [
             { type: 'buyAction', label: 'Buy', icon: '💰', isEndNode: true },
             { type: 'sellAction', label: 'Sell', icon: '💸', isEndNode: true },
             { type: 'logEvent', label: 'Log', icon: '📝', isEndNode: true },
+        ],
+    },
+    {
+        name: 'Utilities',
+        icon: Calculator,
+        color: 'text-slate-400',
+        nodes: [
+            { type: 'memory', label: 'Value Memory', icon: '🧠' },
+            { type: 'priceChange', label: 'Price Change', icon: '📊' },
+            { type: 'delay', label: 'Delay', icon: '⏱️' },
         ],
     },
 ];
@@ -72,13 +91,16 @@ export function NodePalette({ onAddNode, context, onContextChange }: NodePalette
                 <div className="relative group">
                     <select 
                         value={context}
-                        onChange={(e) => onContextChange(e.target.value as MarketContext)}
+                        onChange={(e) => {
+                            const val = e.target.value as MarketContext;
+                            if (val === '15m') onContextChange(val);
+                        }}
                         className="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded px-3 py-2 appearance-none cursor-pointer hover:border-blue-500 transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500"
                     >
                         <option value="15m">15m Up/Down (BTC, ETH, ...)</option>
-                        <option value="1h">1h Up/Down</option>
-                        <option value="4h">4h Up/Down</option>
-                        <option value="generic">Generic Markets</option>
+                        <option value="1h" disabled>1h Up/Down (Coming Soon)</option>
+                        <option value="4h" disabled>4h Up/Down (Coming Soon)</option>
+                        <option value="generic" disabled>Generic Markets (Coming Soon)</option>
                     </select>
                     <ChevronDown className="w-3 h-3 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none group-hover:text-blue-400 transition-colors" />
                 </div>

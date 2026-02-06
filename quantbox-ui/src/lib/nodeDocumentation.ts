@@ -206,6 +206,59 @@ export const nodeDocumentation: Record<string, NodeDocumentation> = {
         config: {},
         example: 'Compare current asset price to the strike price to determine market direction.',
     },
+    strikeMomentum: {
+        name: 'Strike Momentum',
+        category: 'Conditions',
+        description: 'A powerful volatility hunter. Calculates a dynamic threshold based on recent volatility and triggers when Price vs Strike exceeds it.',
+        inputs: [],
+        outputs: [
+            { name: 'Bullish', type: 'signal' },
+            { name: 'Bearish', type: 'signal' }
+        ],
+        config: {
+            volatilityK: 'Sensitivity multiplier (default: 0.6)',
+            minDiff: 'Minimum price difference to trigger (default: 2.0)',
+        },
+        example: 'If Spot > Strike + Threshold, trigger Bullish signal (Buy UP).',
+    },
+    positionManager: {
+        name: 'Position Manager',
+        category: 'Conditions',
+        description: 'Automatically monitors open positions for this strategy. Triggers an Exit signal if Take Profit or Stop Loss targets are met.',
+        inputs: [],
+        outputs: [{ name: 'Exit', type: 'signal' }],
+        config: {
+            takeProfit: 'Take Profit % (e.g., 20)',
+            stopLoss: 'Stop Loss % (e.g., 10)',
+        },
+        example: 'If PnL > +20% or < -10%, trigger Exit to Sell Action.',
+    },
+    memory: {
+        name: 'Value Memory',
+        category: 'Utilities',
+        description: 'Stores a numeric value when it receives a trigger signal. Useful for recording "Entry Price" or "Peak Price".',
+        inputs: [
+            { name: 'Value', type: 'number' },
+            { name: 'Trigger', type: 'signal' }
+        ],
+        outputs: [{ name: 'Stored Value', type: 'number' }],
+        config: {},
+        example: 'When a Buy Action is successful, trigger this node to store the current price as the entry price.',
+    },
+    priceChange: {
+        name: 'Price Change',
+        category: 'Utilities',
+        description: 'Calculates the difference between two values (A and B). Outputs the percentage change.',
+        inputs: [
+            { name: 'A', type: 'number' },
+            { name: 'B', type: 'number' }
+        ],
+        outputs: [{ name: 'Change %', type: 'number' }],
+        config: {
+            mode: 'Calculation mode ("percentage" or "absolute")',
+        },
+        example: 'Connect current price to A and Stored Value to B to see how much the price has moved since entry.',
+    },
     binaryArbitrage: {
         name: 'Binary Arbitrage',
         category: 'Conditions',

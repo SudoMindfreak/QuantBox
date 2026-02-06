@@ -3,7 +3,10 @@ import { ClobClient } from '@polymarket/clob-client';
 import { MarketService } from './services/MarketService';
 import { MarketResolver } from './services/MarketResolver';
 import { MarketOrchestrator } from './services/MarketOrchestrator';
+import { BinanceService } from './services/BinanceService';
 import { OrderbookStream } from './engine/stream';
+
+export { MarketService, MarketResolver, MarketOrchestrator, BinanceService, OrderbookStream };
 import { VirtualWallet } from './engine/wallet';
 import { OrderBookMessage, MarketTransitionEvent, PollingErrorEvent, MarketMode } from './types/polymarket';
 
