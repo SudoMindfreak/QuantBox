@@ -19,7 +19,7 @@ export async function generateStrategy(prompt: string, context?: string, provide
     if (provider === 'openai' || provider === 'grok') {
         const baseUrl = provider === 'grok' ? 'https://api.x.ai/v1' : 'https://api.openai.com/v1';
         const model = provider === 'grok' ? 'grok-beta' : 'gpt-4o-mini';
-        
+
         const response = await fetch(`${baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
@@ -35,9 +35,9 @@ export async function generateStrategy(prompt: string, context?: string, provide
                 response_format: { type: 'json_object' }
             })
         });
-        const data = await response.json();
+        const data: any = await response.json();
         return JSON.parse(data.choices[0].message.content);
-    } 
+    }
 
     if (provider === 'anthropic') {
         const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -54,12 +54,12 @@ export async function generateStrategy(prompt: string, context?: string, provide
                 messages: [{ role: 'user', content: fullPrompt }]
             })
         });
-        const data = await response.json();
+        const data: any = await response.json();
         // Claude doesn't have a native JSON mode via simple header in all regions yet, 
         // so we parse the text block
         return JSON.parse(data.content[0].text);
-    } 
-    
+    }
+
     if (provider === 'gemini') {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${userKey}`;
         const response = await fetch(url, {
@@ -70,7 +70,7 @@ export async function generateStrategy(prompt: string, context?: string, provide
                 generationConfig: { response_mime_type: "application/json" }
             })
         });
-        const data = await response.json();
+        const data: any = await response.json();
         const text = data.candidates[0].content.parts[0].text;
         return JSON.parse(text);
     }
@@ -88,7 +88,7 @@ export async function generateStrategy(prompt: string, context?: string, provide
                 format: 'json'
             })
         });
-        const data = await response.json();
+        const data: any = await response.json();
         return JSON.parse(data.response);
     }
 

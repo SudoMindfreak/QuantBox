@@ -7,11 +7,18 @@ import { MarketService } from 'quantbox-core/dist/services/MarketService.js';
 import { MarketOrchestrator } from 'quantbox-core/dist/services/MarketOrchestrator.js';
 import { BinanceService } from 'quantbox-core/dist/services/BinanceService.js';
 import { VirtualWallet } from 'quantbox-core/dist/engine/wallet.js';
+import { NodeInput, NodeExecutor, OrderbookData, PriceSide } from './types.js';
 
 interface Node {
     id: string;
     type: string;
     data: any;
+}
+
+interface OrderbookState {
+    bids: Map<string, string>; // price -> size
+    asks: Map<string, string>; // price -> size
+    timestamp: string;
 }
 
 interface Edge {
@@ -46,8 +53,15 @@ export class StrategyRunner extends EventEmitter {
     private pendingStrikeLookups: Set<string> = new Set();
 
     // Side Tracking
+    // Side Tracking
     private bull_id: string | null = null;
     private bear_id: string | null = null;
+
+    private orderbooks: Map<string, OrderbookState> = new Map();
+
+
+    // Node executor map for modular execution
+    private nodeExecutors: Record<string, NodeExecutor>;
 
     constructor(
         id: string,
@@ -70,6 +84,18 @@ export class StrategyRunner extends EventEmitter {
         this.marketService = marketService;
         this.binance = binance;
         this.wallet = new VirtualWallet(strategyData.initialBalance || 1000);
+
+        // Initialize executor map
+        this.nodeExecutors = {
+            marketDetector: this.executeMarketDetector.bind(this),
+            orderbook: this.executeOrderbook.bind(this),
+            price: this.executePrice.bind(this),
+            timer: this.executeTimer.bind(this),
+            condition: this.executeCondition.bind(this),
+            buyAction: this.executeBuyAction.bind(this),
+            sellAction: this.executeSellAction.bind(this),
+            portfolio: this.executePortfolio.bind(this),
+        };
     }
 
     public async start() {
@@ -84,6 +110,7 @@ export class StrategyRunner extends EventEmitter {
 
         this.log('📡 Waiting for market data pulse...');
         this.stream.on('orderbook', this.handleMarketData);
+        this.stream.on('price_change', this.handleMarketData);
 
         this.binance.on('price', (data: any) => {
             if (!this.active) return;
@@ -110,14 +137,54 @@ export class StrategyRunner extends EventEmitter {
 
     private handleMarketData = (data: any) => {
         if (!this.active) return;
+
+        // --- 1. State Maintenance ---
+        if (data.event_type === 'book') {
+            // Snapshot: Replace state
+            const state: OrderbookState = {
+                bids: new Map(),
+                asks: new Map(),
+                timestamp: data.timestamp
+            };
+            if (data.bids) data.bids.forEach((o: any) => state.bids.set(o.price, o.size));
+            if (data.asks) data.asks.forEach((o: any) => state.asks.set(o.price, o.size));
+            this.orderbooks.set(data.asset_id, state);
+            // console.log(`[Stream] Snapshot for ${data.asset_id}`);
+        } else if (data.event_type === 'price_change') {
+            // Delta: Update state
+            const state = this.orderbooks.get(data.asset_id);
+            if (state) {
+                if (data.bids) {
+                    data.bids.forEach((o: any) => {
+                        if (o.size === '0' || o.size === 0) state.bids.delete(o.price);
+                        else state.bids.set(o.price, o.size);
+                    });
+                }
+                if (data.asks) {
+                    data.asks.forEach((o: any) => {
+                        if (o.size === '0' || o.size === 0) state.asks.delete(o.price);
+                        else state.asks.set(o.price, o.size);
+                    });
+                }
+                state.timestamp = data.timestamp;
+            }
+        }
+
+        // Keep raw message for fallback/legacy (though it might be a delta now!)
+        this.latestOrderbooks.set(data.asset_id, data);
+
+        // --- 2. Trigger Logic ---
+        // Only trigger if we track this asset
         if (data.asset_id && this.subscribedAssets.has(data.asset_id)) {
-            this.latestOrderbooks.set(data.asset_id, data);
+            // Debounce or verify significant change? For now, trigger on every update.
             const detectors = Array.from(this.nodes.values()).filter(n => n.type === 'marketDetector');
             for (const detector of detectors) {
                 this.executeNode(detector.id, { assetId: data.asset_id });
             }
         }
     }
+
+
 
     private async settlePositions(previousMarket: MarketMetadata) {
         this.log(`🏁 Settling expired market: ${previousMarket.question}`, 'info');
@@ -230,216 +297,20 @@ export class StrategyRunner extends EventEmitter {
         let shouldContinue = true;
 
         try {
-            switch (node.type) {
-                case 'marketDetector': break;
+            // Use modular executors if available
+            const executor = this.nodeExecutors[node.type];
+            if (executor) {
+                const result = await executor(node, inputData);
+                shouldContinue = result.shouldContinue;
+                outputData = result.outputData;
+            } else if (node.type === 'marketDetector') {
+                // Market detector is special - handled separately
+                shouldContinue = true;
 
-                case 'orderbookSnapshot':
-                    const ob = this.latestOrderbooks.get(inputData.assetId);
-                    if (!ob) shouldContinue = false;
-                    else outputData = { ...inputData, orderbook: ob };
-                    break;
-
-                case 'imbalanceCheck':
-                    if (!outputData.orderbook) { shouldContinue = false; break; }
-                    const { ratio, outcome } = node.data;
-                    const targetOutcome = outcome || 'UP';
-                    const targetAssetId = targetOutcome === 'UP' ? this.bull_id : this.bear_id;
-
-                    if (!targetAssetId) { shouldContinue = false; break; }
-                    const targetOb = this.latestOrderbooks.get(targetAssetId);
-                    if (!targetOb) { shouldContinue = false; break; }
-
-                    const sBids = [...targetOb.bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
-                    const sAsks = [...targetOb.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
-
-                    if (sBids.length === 0 || sAsks.length === 0) { shouldContinue = false; break; }
-
-                    const bidVol = sBids.slice(0, 5).reduce((acc: number, b: any) => acc + parseFloat(b.size), 0);
-                    const askVol = sAsks.slice(0, 5).reduce((acc: number, a: any) => acc + parseFloat(a.size), 0);
-
-                    const currentRatio = bidVol / (askVol || 1);
-                    const imbThreshold = parseFloat(ratio) || 1.5;
-
-                    shouldContinue = currentRatio >= imbThreshold;
-                    if (shouldContinue) {
-                        outputData = {
-                            ...outputData,
-                            assetId: targetAssetId,
-                            currentRatio,
-                            bestAsk: sAsks[0].price,
-                            bestBid: sBids[0].price
-                        };
-                    }
-                    break;
-
-                case 'buyAction':
-                    const buyQty = node.data.quantity || 5;
-                    const buyOutcome = node.data.outcome || 'UP';
-                    const buyAssetId = buyOutcome === 'UP' ? this.bull_id : this.bear_id;
-
-                    if (!buyAssetId) { shouldContinue = false; break; }
-                    const obBuy = this.latestOrderbooks.get(buyAssetId);
-                    const metaBuy = this.currentMarketMetadata.get(buyAssetId);
-
-                    if (obBuy && metaBuy) {
-                        const order = this.wallet.simulateBuy(buyAssetId, buyOutcome, buyQty, metaBuy, obBuy);
-                        if (order.status === 'FILLED') {
-                            this.log(`💰 BUY FILLED: ${order.filledSize} ${buyOutcome} @ ${(order.averageFillPrice * 100).toFixed(1)}¢`, 'success');
-                            this.nodeCooldowns.set(nodeId, Date.now()); // Set cooldown on successful buy
-                            this.emitWalletUpdate();
-                        } else {
-                            this.log(`❌ BUY FAILED: ${order.status}`, 'error');
-                            shouldContinue = false;
-                        }
-                    } else shouldContinue = false;
-                    break;
-
-                case 'sellAction':
-                    const sellQty = node.data.quantity || 5;
-                    const sellOutcome = node.data.outcome || 'UP';
-                    const sellAssetId = sellOutcome === 'UP' ? this.bull_id : this.bear_id;
-
-                    if (!sellAssetId) { shouldContinue = false; break; }
-                    const obSell = this.latestOrderbooks.get(sellAssetId);
-                    const metaSell = this.currentMarketMetadata.get(sellAssetId);
-
-                    if (obSell && metaSell) {
-                        const position = this.wallet.getPosition(sellAssetId);
-                        if (!position || position.quantity < sellQty) {
-                            this.log(`❌ SELL REJECTED: Insufficient shares`, 'error');
-                            this.emitNodeStatus(nodeId, 'error');
-                            shouldContinue = false;
-                            break;
-                        }
-                        const order = this.wallet.simulateSell(sellAssetId, sellOutcome, sellQty, metaSell, obSell);
-                        if (order.status === 'FILLED') {
-                            this.log(`💸 SELL FILLED: ${order.filledSize} ${sellOutcome} @ ${(order.averageFillPrice * 100).toFixed(1)}¢`, 'success');
-                            this.nodeCooldowns.set(nodeId, Date.now());
-                            this.emitWalletUpdate();
-                        } else {
-                            this.log(`❌ SELL FAILED: ${order.status}`, 'error');
-                            shouldContinue = false;
-                        }
-                    } else shouldContinue = false;
-                    break;
-
-                case 'logAction':
-                    const msg = node.data.message || 'Log';
-                    const targetOutcomeL = node.data.outcome || 'UP';
-                    const targetId = targetOutcomeL === 'UP' ? this.bull_id : this.bear_id;
-                    const targetObLog = targetId ? this.latestOrderbooks.get(targetId) : null;
-
-                    let cents = 'N/A';
-                    if (targetObLog) {
-                        const sAsks = [...targetObLog.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
-                        if (sAsks[0]) cents = (parseFloat(sAsks[0].price) * 100).toFixed(1) + '¢';
-                    }
-
-                    this.log(`📝 ${msg} | ${targetOutcomeL} Price: ${cents}`);
-                    break;
-
-                case 'strikeMomentum':
-                    const symbol = node.data.symbol || 'BTCUSDT';
-                    const k = parseFloat(node.data.volatilityK) || 0.6;
-                    const minDiff = parseFloat(node.data.minDiff) || 2.0;
-                    const spot = this.binance.getCurrentPrice(symbol);
-
-                    if (!spot) {
-                        const subKey = `waiting_price_${symbol}`;
-                        if (!this.nodeMemory.get(subKey)) {
-                            this.log(`📡 Connecting to live data feed for ${symbol}...`);
-                            this.binance.subscribePrice(symbol);
-                            this.nodeMemory.set(subKey, true);
-                        }
-                        shouldContinue = false;
-                        break;
-                    }
-
-                    const metadata = Array.from(this.currentMarketMetadata.values())[0];
-                    if (!metadata) { shouldContinue = false; break; }
-                    const marketStart = new Date(metadata.end_date_iso).getTime() - (900 * 1000);
-
-                    if (!this.strikePrices.has(node.id)) {
-                        if (this.pendingStrikeLookups.has(node.id)) {
-                            shouldContinue = false;
-                            break;
-                        }
-
-                        this.pendingStrikeLookups.add(node.id);
-                        try {
-                            const strike = await this.binance.getStrikePrice(symbol, marketStart);
-                            const prevRange = await this.binance.getPreviousRange(symbol);
-
-                            if (strike && prevRange) {
-                                this.strikePrices.set(node.id, strike);
-                                const threshold = Math.max(prevRange.range * k, minDiff);
-                                this.volatilityThresholds.set(node.id, threshold);
-                                this.log(`🎯 Strike Locked: $${strike.toFixed(2)} | Trigger Gap: ±$${threshold.toFixed(2)}`, 'success');
-                            } else {
-                                shouldContinue = false;
-                            }
-                        } finally {
-                            this.pendingStrikeLookups.delete(node.id);
-                        }
-
-                        // If we failed to get strike (and thus didn't set it), or just finished setting it,
-                        // we shouldn't continue to logic below immediately in this pass if we want to be strict,
-                        // but actually if we just set it, we CAN continue. 
-                        // However, simpler to break and let next tick handle it if we want to be safe, 
-                        // OR just check if it was set.
-                        if (!this.strikePrices.has(node.id)) {
-                            shouldContinue = false;
-                            break;
-                        }
-                    }
-
-                    const strikePrice = this.strikePrices.get(node.id)!;
-                    const momThreshold = this.volatilityThresholds.get(node.id)!;
-                    const diff = spot - strikePrice;
-
-                    this.io.to(`strategy:${this.id}`).emit('strategy:node:data', {
-                        nodeId: node.id,
-                        data: { liveSpot: spot, strikePrice, diff, threshold: momThreshold }
-                    });
-
-                    const lastLog = this.lastEvaluationLog.get(node.id) || 0;
-                    if (Date.now() - lastLog > 5000) {
-                        const dir = diff >= 0 ? 'ABOVE' : 'BELOW';
-                        const progress = (Math.abs(diff) / momThreshold * 100).toFixed(0);
-                        this.log(`🌊 Momentum: $${spot.toFixed(2)} (${Math.abs(diff).toFixed(2)} ${dir} strike) | ${progress}% to trigger`);
-                        this.lastEvaluationLog.set(node.id, Date.now());
-                    }
-
-                    const outgoing = this.edges.filter(e => e.source === nodeId);
-                    for (const edge of outgoing) {
-                        if (edge.sourceHandle === 'bullish' && diff > momThreshold) {
-                            this.executeNode(edge.target, { ...inputData, spot, strikePrice, diff });
-                        } else if (edge.sourceHandle === 'bearish' && diff < -momThreshold) {
-                            this.executeNode(edge.target, { ...inputData, spot, strikePrice, diff });
-                        }
-                    }
-                    shouldContinue = false;
-                    break;
-
-                case 'memory':
-                    if (inputData.value !== undefined) {
-                        this.nodeMemory.set(node.id, inputData.value);
-                        this.io.to(`strategy:${this.id}`).emit('strategy:node:data', {
-                            nodeId: node.id,
-                            data: { storedValue: inputData.value }
-                        });
-                    }
-                    outputData = { ...inputData, storedValue: this.nodeMemory.get(node.id) };
-                    break;
-
-                case 'priceChange':
-                    const valA = inputData.a || 0;
-                    const valB = inputData.b || 0;
-                    const result = (node.data.mode || 'percentage') === 'percentage'
-                        ? (valB !== 0 ? ((valA - valB) / valB) * 100 : 0)
-                        : valA - valB;
-                    outputData = { ...inputData, change: result };
-                    break;
+            } else {
+                // Unknown node type
+                this.log(`⚠️ Unknown node type: ${node.type}`, 'error');
+                shouldContinue = false;
             }
             this.emitNodeStatus(nodeId, 'success');
         } catch (err) {
@@ -451,9 +322,269 @@ export class StrategyRunner extends EventEmitter {
         if (shouldContinue) {
             const outgoingEdges = this.edges.filter(e => e.source === nodeId);
             for (const edge of outgoingEdges) {
-                this.executeNode(edge.target, outputData);
+                let executionData = outputData;
+
+                // Handle split outputs for Price Node
+                if (node.type === 'price') {
+                    if (edge.sourceHandle === 'yes' && outputData.priceData?.yes) {
+                        executionData = { ...outputData, yesPrice: outputData.priceData.yes };
+                    } else if (edge.sourceHandle === 'no' && outputData.priceData?.no) {
+                        executionData = { ...outputData, noPrice: outputData.priceData.no };
+                    }
+                }
+
+                this.executeNode(edge.target, executionData);
             }
         }
+    }
+
+    // ============================================
+    // MODULAR NODE EXECUTORS
+    // ============================================
+
+    private async executeMarketDetector(node: any, inputData: NodeInput) {
+        // Market detector logic is handled separately in initializeMarketDetector
+        return { shouldContinue: true, outputData: inputData };
+    }
+
+    private async executeOrderbook(node: any, inputData: NodeInput) {
+        // console.log(`[Orderbook] Executing for ${inputData.assetId} (Node ${node.id})`);
+        const ob = this.latestOrderbooks.get(inputData.assetId!);
+        if (!ob) {
+            this.log(`⚠️ Orderbook missing for ${inputData.assetId}`, 'error');
+            return { shouldContinue: false, outputData: inputData };
+        }
+
+        // Parse Yes/No sides from orderbook
+        const yesSide = this.parsePriceSide(ob, this.bull_id!);
+        const noSide = this.parsePriceSide(ob, this.bear_id!);
+        const spread = yesSide.midPrice - noSide.midPrice;
+
+        const yesSpread = yesSide.bestAsk > 0 && yesSide.bestBid > 0 ? yesSide.bestAsk - yesSide.bestBid : 0;
+        const noSpread = noSide.bestAsk > 0 && noSide.bestBid > 0 ? noSide.bestAsk - noSide.bestBid : 0;
+
+        const orderbookData: OrderbookData = {
+            yes: yesSide,
+            no: noSide,
+            spread,
+            yesSpread,
+            noSpread,
+            assetId: inputData.assetId!
+        };
+
+        // Emit to UI
+        this.io.to(`strategy:${this.id}`).emit('strategy:node:data', {
+            nodeId: node.id,
+            data: orderbookData
+        });
+
+        return {
+            shouldContinue: true,
+            outputData: { ...inputData, orderbook: orderbookData }
+        };
+    }
+
+    private async executePrice(node: any, inputData: NodeInput) {
+        const ob = inputData.orderbook as OrderbookData | undefined;
+        if (!ob) {
+            return { shouldContinue: false, outputData: inputData };
+        }
+
+        const priceData = {
+            yes: { side: 'YES' as const, ...ob.yes },
+            no: { side: 'NO' as const, ...ob.no }
+        };
+
+        this.io.to(`strategy:${this.id}`).emit('strategy:node:data', {
+            nodeId: node.id,
+            data: priceData,
+        });
+
+        return {
+            shouldContinue: true,
+            outputData: { ...inputData, priceData }
+        };
+    }
+
+    private async executeBuyAction(node: any, inputData: NodeInput) {
+        const buyQty = node.data.quantity || 5;
+        const buyOutcome = node.data.outcome || 'UP';
+        const buyAssetId = buyOutcome === 'UP' ? this.bull_id : this.bear_id;
+
+        if (!buyAssetId) {
+            return { shouldContinue: false, outputData: inputData };
+        }
+
+        const obBuy = this.latestOrderbooks.get(buyAssetId);
+        const metaBuy = this.currentMarketMetadata.get(buyAssetId);
+
+        if (obBuy && metaBuy) {
+            const order = this.wallet.simulateBuy(buyAssetId, buyOutcome, buyQty, metaBuy, obBuy);
+            if (order.status === 'FILLED') {
+                this.log(`💰 BUY FILLED: ${order.filledSize} ${buyOutcome} @ ${(order.averageFillPrice * 100).toFixed(1)}¢`, 'success');
+                this.nodeCooldowns.set(node.id, Date.now());
+                this.emitWalletUpdate();
+                return { shouldContinue: true, outputData: { ...inputData, order } };
+            } else {
+                this.log(`❌ BUY FAILED: ${order.status}`, 'error');
+                return { shouldContinue: false, outputData: inputData };
+            }
+        }
+        return { shouldContinue: false, outputData: inputData };
+    }
+
+    private async executeSellAction(node: any, inputData: NodeInput) {
+        const sellQty = node.data.quantity || 5;
+        const sellOutcome = node.data.outcome || 'UP';
+        const sellAssetId = sellOutcome === 'UP' ? this.bull_id : this.bear_id;
+
+        if (!sellAssetId) {
+            return { shouldContinue: false, outputData: inputData };
+        }
+
+        const obSell = this.latestOrderbooks.get(sellAssetId);
+        const metaSell = this.currentMarketMetadata.get(sellAssetId);
+
+        if (obSell && metaSell) {
+            const position = this.wallet.getPosition(sellAssetId);
+            if (!position || position.quantity < sellQty) {
+                this.log(`❌ SELL REJECTED: Insufficient shares`, 'error');
+                this.emitNodeStatus(node.id, 'error');
+                return { shouldContinue: false, outputData: inputData };
+            }
+
+            const order = this.wallet.simulateSell(sellAssetId, sellOutcome, sellQty, metaSell, obSell);
+            if (order.status === 'FILLED') {
+                this.log(`💸 SELL FILLED: ${order.filledSize} ${sellOutcome} @ ${(order.averageFillPrice * 100).toFixed(1)}¢`, 'success');
+                this.nodeCooldowns.set(node.id, Date.now());
+                this.emitWalletUpdate();
+                return { shouldContinue: true, outputData: { ...inputData, order } };
+            } else {
+                this.log(`❌ SELL FAILED: ${order.status}`, 'error');
+                return { shouldContinue: false, outputData: inputData };
+            }
+        }
+        return { shouldContinue: false, outputData: inputData };
+    }
+
+    // ============================================
+    // NEW ARCHITECTURE NODE EXECUTORS
+    // ============================================
+
+    private async executeCondition(node: any, inputData: NodeInput) {
+        // TODO: Implement condition evaluator
+        // For now, pass through with a simple threshold check
+        const threshold = node.data?.threshold || 0.5;
+        const operator = node.data?.operator || '<';
+        const price = inputData.yesPrice?.midPrice || inputData.noPrice?.midPrice || 0;
+
+        let conditionMet = false;
+        if (operator === '<') {
+            conditionMet = price < threshold;
+        } else if (operator === '>') {
+            conditionMet = price > threshold;
+        } else if (operator === '<=') {
+            conditionMet = price <= threshold;
+        } else if (operator === '>=') {
+            conditionMet = price >= threshold;
+        }
+
+        this.log(`⚡ Condition: ${price.toFixed(3)} ${operator} ${threshold} = ${conditionMet ? 'TRUE ✅' : 'FALSE ❌'}`);
+
+        return {
+            shouldContinue: conditionMet,
+            outputData: {
+                ...inputData,
+                conditionMet,
+                conditionValue: price,
+            }
+        };
+    }
+
+    private async executeTimer(node: any, inputData: NodeInput) {
+        const seconds = node.data?.seconds || 1;
+        this.log(`⏳ Timer: Waiting ${seconds} seconds...`);
+
+        await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+
+        return {
+            shouldContinue: true,
+            outputData: inputData
+        };
+    }
+
+    private async executePortfolio(node: any, inputData: NodeInput) {
+        // Log current portfolio state
+        const balance = this.wallet.getBalance();
+        const positions = this.wallet.getAllPositions();
+        const pnl = this.wallet.getTotalPnL();
+
+        this.log(`💼 Portfolio: Balance $${balance.toFixed(2)} | P&L $${pnl.total.toFixed(2)} | Positions: ${positions.length}`);
+
+        return {
+            shouldContinue: true,
+            outputData: {
+                ...inputData,
+                portfolioSnapshot: {
+                    balance,
+                    positions,
+                    pnl,
+                    timestamp: Date.now(),
+                }
+            }
+        };
+    }
+
+    // ============================================
+    // HELPER METHODS
+    // ============================================
+
+    private parsePriceSide(ob: OrderBookMessage, assetId: string): PriceSide {
+        // Use reconstructed state if available
+        const state = this.orderbooks.get(assetId);
+
+        if (state) {
+            // Convert Map to Array and Sort
+            // Bids: Descending (Highest First)
+            const sBids = Array.from(state.bids.entries())
+                .map(([price, size]) => ({ price, size }))
+                .sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+
+            // Asks: Ascending (Lowest First)
+            const sAsks = Array.from(state.asks.entries())
+                .map(([price, size]) => ({ price, size }))
+                .sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+
+            const bestBid = sBids.length > 0 ? parseFloat(sBids[0].price) : 0;
+            const bestAsk = sAsks.length > 0 ? parseFloat(sAsks[0].price) : 0;
+            const midPrice = (bestBid + bestAsk) / 2;
+            const volume = sBids.reduce((sum, b) => sum + parseFloat(b.size), 0) +
+                sAsks.reduce((sum, a) => sum + parseFloat(a.size), 0);
+
+            return {
+                bestAsk,
+                bestBid,
+                midPrice: isNaN(midPrice) ? 0 : midPrice,
+                volume
+            };
+        }
+
+        // Fallback to legacy raw message logic (only if state missing)
+        const targetOb = assetId ? this.latestOrderbooks.get(assetId) : ob;
+        if (!targetOb || !targetOb.bids || !targetOb.asks) {
+            return { bestAsk: 0, bestBid: 0, midPrice: 0, volume: 0 };
+        }
+
+        const sBids = [...targetOb.bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+        const sAsks = [...targetOb.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+
+        const bestBid = sBids.length > 0 ? parseFloat(sBids[0].price) : 0;
+        const bestAsk = sAsks.length > 0 ? parseFloat(sAsks[0].price) : 0;
+        const midPrice = (bestBid + bestAsk) / 2;
+        const volume = sBids.reduce((sum, b) => sum + parseFloat(b.size), 0) +
+            sAsks.reduce((sum, a) => sum + parseFloat(a.size), 0);
+
+        return { bestAsk, bestBid, midPrice, volume };
     }
 
     private emitNodeStatus(nodeId: string, status: 'idle' | 'running' | 'success' | 'error') {

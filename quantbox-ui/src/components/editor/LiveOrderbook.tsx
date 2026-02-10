@@ -49,15 +49,15 @@ export function LiveOrderbook({ marketSlug }: LiveOrderbookProps) {
                 const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/markets/resolve?input=${marketSlug}`);
                 if (!response.ok) throw new Error('Failed to resolve market');
                 const data = await response.json();
-                
+
                 console.log(`[Orderbook] Resolved market:`, data.tokenIds);
                 setTokenIds(data.tokenIds);
-                
+
                 // Identify outcomes (Standardize to UP/DOWN for display)
                 const tokens = data.tokens || [];
                 let upLabel = 'UP';
                 let downLabel = 'DOWN';
-                
+
                 tokens.forEach((t: any) => {
                     const out = t.outcome.toLowerCase();
                     if (out === 'up' || out === 'yes') upLabel = t.outcome;
@@ -127,27 +127,50 @@ export function LiveOrderbook({ marketSlug }: LiveOrderbookProps) {
 
     // Current Market State
     const currentTokenId = selectedOutcome === 'yes' ? tokenIds?.yes : tokenIds?.no;
-    const book = currentTokenId ? orderbooks[currentTokenId] : null;
+    const otherTokenId = selectedOutcome === 'yes' ? tokenIds?.no : tokenIds?.yes;
 
-    // MANDATORY: Sort based on price to identify best levels
-    const sortedAsks = book?.asks ? [...book.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price)) : [];
-    const sortedBids = book?.bids ? [...book.bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price)) : [];
+    const currentBook = currentTokenId ? orderbooks[currentTokenId] : null;
+    const otherBook = otherTokenId ? orderbooks[otherTokenId] : null;
+
+    // Main Asks (Low to High, reversed for display so Best is at bottom)
+    const sortedAsks = currentBook?.asks ? [...currentBook.asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price)) : [];
+
+    // Main Bids (High to Low, Best at Top)
+    const sortedBids = currentBook?.bids ? [...currentBook.bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price)) : [];
 
     const bestAsk = sortedAsks[0]?.price;
     const bestBid = sortedBids[0]?.price;
 
-    // Display Logic: 
-    // ASKS: High to Low (Best Ask at bottom of the list)
-    // BIDS: High to Low (Best Bid at top of the list)
     const displayAsks = sortedAsks.slice(0, 8).reverse();
     const displayBids = sortedBids.slice(0, 8);
 
-    const getBestPriceLabel = (side: 'yes' | 'no') => {
-        const id = side === 'yes' ? tokenIds?.yes : tokenIds?.no;
-        if (!id || !orderbooks[id]) return '--.-¢';
-        const b = orderbooks[id];
-        const asks = [...(b.asks || [])].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
-        return asks[0] ? formatPrice(asks[0].price) : '--.-¢';
+    const getBestAskLabel = (side: 'yes' | 'no') => {
+        if (!tokenIds) return '--.-¢';
+
+        const getPrice = (id: string, type: 'bid' | 'ask') => {
+            const b = orderbooks[id];
+            if (!b) return undefined;
+            const levels = type === 'ask' ? b.asks : b.bids;
+            if (!levels || levels.length === 0) return undefined;
+            const sorted = [...levels].sort((a, b) =>
+                type === 'ask' ? parseFloat(a.price) - parseFloat(b.price) : parseFloat(b.price) - parseFloat(a.price)
+            );
+            return sorted[0].price;
+        };
+
+        const yesId = tokenIds.yes;
+        const noId = tokenIds.no;
+
+        const yesAsk = getPrice(yesId, 'ask');
+        const noAsk = getPrice(noId, 'ask');
+
+        const f = (p: string | undefined) => p ? (parseFloat(p) * 100).toFixed(1) : '--.-';
+
+        if (side === 'yes') {
+            return `${f(yesAsk)}¢`;
+        } else {
+            return `${f(noAsk)}¢`;
+        }
     };
 
     return (
@@ -168,25 +191,23 @@ export function LiveOrderbook({ marketSlug }: LiveOrderbookProps) {
                 <div className="flex p-1 bg-[#020617] rounded-lg border border-[#1e293b] gap-1">
                     <button
                         onClick={() => setSelectedOutcome('yes')}
-                        className={`flex-1 py-2 text-[10px] font-black rounded-md transition-all flex flex-col items-center leading-tight ${
-                            selectedOutcome === 'yes' 
-                            ? 'bg-blue-600 text-white shadow-lg' 
+                        className={`flex-1 py-2 text-[10px] font-black rounded-md transition-all flex flex-col items-center leading-tight ${selectedOutcome === 'yes'
+                            ? 'bg-blue-600 text-white shadow-lg'
                             : 'text-slate-500 hover:text-slate-300'
-                        }`}
+                            }`}
                     >
                         <span className="uppercase">{outcomes.yes}</span>
-                        <span className="text-[9px] opacity-70 font-mono mt-0.5">{getBestPriceLabel('yes')}</span>
+                        <span className="text-[9px] opacity-70 font-mono mt-0.5">{getBestAskLabel('yes')}</span>
                     </button>
                     <button
                         onClick={() => setSelectedOutcome('no')}
-                        className={`flex-1 py-2 text-[10px] font-black rounded-md transition-all flex flex-col items-center leading-tight ${
-                            selectedOutcome === 'no' 
-                            ? 'bg-slate-800 text-white shadow-lg' 
+                        className={`flex-1 py-2 text-[10px] font-black rounded-md transition-all flex flex-col items-center leading-tight ${selectedOutcome === 'no'
+                            ? 'bg-slate-800 text-white shadow-lg'
                             : 'text-slate-500 hover:text-slate-300'
-                        }`}
+                            }`}
                     >
                         <span className="uppercase">{outcomes.no}</span>
-                        <span className="text-[9px] opacity-70 font-mono mt-0.5">{getBestPriceLabel('no')}</span>
+                        <span className="text-[9px] opacity-70 font-mono mt-0.5">{getBestAskLabel('no')}</span>
                     </button>
                 </div>
             </CardHeader>
@@ -210,6 +231,9 @@ export function LiveOrderbook({ marketSlug }: LiveOrderbookProps) {
                         <ScrollArea className="flex-1">
                             <div className="flex flex-col">
                                 {/* ASKS */}
+                                <div className="grid grid-cols-2 py-1 px-4 bg-slate-900/40 border-b border-slate-800">
+                                    <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest col-span-2">Asks</div>
+                                </div>
                                 {displayAsks.map((ask, i) => (
                                     <div key={`ask-${i}`} className="grid grid-cols-2 text-[11px] py-1 px-4 hover:bg-rose-500/5 transition-colors relative font-mono">
                                         <div className="absolute inset-y-0 right-0 bg-rose-500/[0.03] transition-all" style={{ width: `${Math.min(parseFloat(ask.size) / 1000, 100)}%` }} />
@@ -227,6 +251,9 @@ export function LiveOrderbook({ marketSlug }: LiveOrderbookProps) {
                                 </div>
 
                                 {/* BIDS */}
+                                <div className="grid grid-cols-2 py-1 px-4 bg-slate-900/40 border-b border-slate-800">
+                                    <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest col-span-2">Bids</div>
+                                </div>
                                 {displayBids.map((bid, i) => (
                                     <div key={`bid-${i}`} className="grid grid-cols-2 text-[11px] py-1 px-4 hover:bg-emerald-500/5 transition-colors relative font-mono">
                                         <div className="absolute inset-y-0 right-0 bg-emerald-500/[0.03] transition-all" style={{ width: `${Math.min(parseFloat(bid.size) / 1000, 100)}%` }} />
