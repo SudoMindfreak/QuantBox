@@ -73,8 +73,7 @@ app.get('/api/strategies', async (c) => {
         
         return c.json(allStrategies.map(s => ({
             ...s,
-            nodes: JSON.parse(s.nodes as string),
-            edges: JSON.parse(s.edges as string),
+            pythonCode: s.pythonCode,
         })));
     } catch (error) {
         console.error('Error fetching strategies:', error);
@@ -93,8 +92,7 @@ app.post('/api/strategies', async (c) => {
             id: randomUUID(),
             name: body.name || 'Untitled Strategy',
             description: body.description || null,
-            nodes: JSON.stringify(body.nodes || []),
-            edges: JSON.stringify(body.edges || []),
+            pythonCode: body.pythonCode || null,
             initialBalance: body.initialBalance || 100,
             currentBalance: body.initialBalance || 100,
             status: 'draft',
@@ -126,8 +124,7 @@ app.get('/api/strategies/:id', async (c) => {
 
         return c.json({
             ...strategy,
-            nodes: JSON.parse(strategy.nodes as string),
-            edges: JSON.parse(strategy.edges as string),
+            pythonCode: strategy.pythonCode,
         });
     } catch (error) {
         console.error('Error fetching strategy:', error);
@@ -149,8 +146,7 @@ app.put('/api/strategies/:id', async (c) => {
 
         if (body.name) updateData.name = body.name;
         if (body.description !== undefined) updateData.description = body.description;
-        if (body.nodes) updateData.nodes = JSON.stringify(body.nodes);
-        if (body.edges) updateData.edges = JSON.stringify(body.edges);
+        if (body.pythonCode !== undefined) updateData.pythonCode = body.pythonCode;
         if (body.initialBalance !== undefined) updateData.initialBalance = body.initialBalance;
         if (body.status) updateData.status = body.status;
 
@@ -209,7 +205,6 @@ app.post('/api/strategies/:id/start', async (c) => {
         const { db } = await import('./db/index.js');
         const { strategies } = await import('./db/schema.js');
         const { eq } = await import('drizzle-orm');
-        const { StrategyRunner } = await import('./engine/StrategyRunner.js');
 
         const strategy = await db.select().from(strategies).where(eq(strategies.id, id)).get();
 
@@ -217,7 +212,13 @@ app.post('/api/strategies/:id/start', async (c) => {
             return c.json({ error: 'Strategy not found' }, 404);
         }
 
-        const runner = new StrategyRunner(id, strategy, io, stream, marketResolver, marketService, binanceService);
+        if (!strategy.pythonCode) {
+            return c.json({ error: 'Strategy has no logic to run' }, 400);
+        }
+
+        const { PythonStrategyRunner } = await import('./engine/PythonStrategyRunner.js');
+        const runner = new PythonStrategyRunner(id, strategy, io);
+        
         await runner.start();
         activeRunners.set(id, runner);
 

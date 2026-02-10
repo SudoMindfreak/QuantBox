@@ -6,8 +6,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "QuantBox - Multi-Strategy Trading",
-  description: "Visual node-based strategy builder for Polymarket",
+  title: "QuantBox | AI Strategy Engine",
+  description: "Prompt-to-Trade: AI-powered algorithmic trading for Polymarket",
 };
 
 export default function RootLayout({

@@ -5,9 +5,8 @@ export const strategies = sqliteTable('strategies', {
     name: text('name').notNull(),
     description: text('description'),
 
-    // Node graph (stored as JSON strings)
-    nodes: text('nodes').notNull(),
-    edges: text('edges').notNull(),
+    // Python Strategy
+    pythonCode: text('python_code'),
 
     // Balance & Risk
     initialBalance: real('initial_balance').notNull().default(100),

@@ -1,7 +1,7 @@
 {
     "name": "quantbox-core",
     "version": "0.1.0",
-    "description": "Visual Trading Sandbox for Polymarket - Core Engine",
+    "description": "QuantBox Core: AI-Powered Python Strategy Engine for Polymarket",
     "main": "dist/index.js",
     "scripts": {
         "dev": "ts-node src/index.ts",

@@ -1,7 +1,6 @@
 import axios from 'axios';
 import { GammaEvent, GammaMarket, MarketMetadata } from '../types/polymarket';
 import { ClobClient } from '@polymarket/clob-client';
-import { MarketTypeDetector } from './MarketTypeDetector';
 
 /**
  * MarketResolver - Intelligent market fetching and rollover
@@ -15,11 +14,9 @@ import { MarketTypeDetector } from './MarketTypeDetector';
 export class MarketResolver {
     private clobClient: ClobClient;
     private gammaApiBase = 'https://gamma-api.polymarket.com';
-    private detector: MarketTypeDetector;
 
     constructor(clobClient: ClobClient) {
         this.clobClient = clobClient;
-        this.detector = new MarketTypeDetector();
     }
 
     private getIntervalSeconds(category: string): number {
@@ -29,6 +26,18 @@ export class MarketResolver {
             case '15m':
             default: return 900;
         }
+    }
+
+    /**
+     * Extracts the base slug from a rolling market slug (removes timestamp)
+     */
+    private extractBaseSlug(slug: string): string {
+        const parts = slug.split('-');
+        const lastPart = parts[parts.length - 1];
+        if (this.isNumeric(lastPart)) {
+            return parts.slice(0, -1).join('-');
+        }
+        return slug;
     }
 
     /**
@@ -44,7 +53,7 @@ export class MarketResolver {
         }
 
         const slug = parsed.value;
-        const baseSlug = this.detector.extractBaseSlug(slug);
+        const baseSlug = this.extractBaseSlug(slug);
         const isRolling = category === '15m' || category === '1h' || category === '4h' || 
                           baseSlug !== slug || slug.endsWith('-15m') || slug.endsWith('-1h') || slug.endsWith('-4h');
 
@@ -152,7 +161,7 @@ export class MarketResolver {
         }
 
         // Market is expired or inactive, check if it's a rolling market
-        const baseSlug = this.detector.extractBaseSlug(originalSlug);
+        const baseSlug = this.extractBaseSlug(originalSlug);
         const isRolling = category === '15m' || category === '1h' || category === '4h' || 
                           baseSlug !== originalSlug || originalSlug.endsWith('-15m');
 
@@ -164,7 +173,6 @@ export class MarketResolver {
             
             // Re-fetch event for the resolved active slug to get the GammaMarket object
             // We use the question title to search or the baseSlug
-            const searchTerms = currentMetadata.question.split(' - ')[0]; // E.g. "Bitcoin Up or Down"
             const activeEvent = await this.fetchEventBySlug(baseSlug); 
             
             if (activeEvent && activeEvent.markets && activeEvent.markets.length > 0) {

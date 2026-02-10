@@ -1,20 +1,39 @@
 import 'dotenv/config';
 
 const SYSTEM_PROMPT = `
-You are the QuantBox Strategy Architect. 
-Translate the user's trading idea into a visual node graph for Polymarket.
+You are the QuantBox Python Strategy Architect. 
+Your goal is to translate the user's trading idea into a Python class that inherits from QuantBoxStrategy.
 
-Available nodes: marketDetector, scheduleTrigger, orderbookSnapshot, imbalanceCheck, buyAction, sellAction, logEvent, strikeMomentum, positionManager, memory, priceChange.
+API Reference:
+- self.spot_price: Current Binance spot price (e.g. 65000.5)
+- self.strike_price: The market's strike price (e.g. 65000.0)
+- self.balance: Your current USDC balance.
+- self.bull_id / self.bear_id: Token IDs for UP/DOWN sides.
+- self.latest_prices: Dict of {asset_id: {'ask': float, 'bid': float}}
+- await self.buy(outcome, qty, price_limit=0.99): outcome is 'UP' or 'DOWN'.
+- await self.sell(outcome, qty): outcome is 'UP' or 'DOWN'.
+- self.log(message, level="info"): Log to the console.
 
-Return ONLY a JSON object:
-{
-  "nodes": [{ "id": "1", "type": "...", "position": {"x":0, "y":0}, "data": {...} }],
-  "edges": [{ "id": "e1-2", "source": "1", "target": "2", "sourceHandle": "..." }]
-}
+Template:
+\`\`\`python
+from quantbox import QuantBoxStrategy
+
+class MyStrategy(QuantBoxStrategy):
+    async def on_tick(self):
+        # Your logic here
+        pass
+\`\`\`
+
+Return ONLY the Python code. No explanations.
 `;
 
 export async function generateStrategy(prompt: string, context?: string, provider = 'openai', userKey?: string) {
-    const fullPrompt = `Market Context: ${context || '15m'}. Prompt: ${prompt}`;
+    // Context can now include the previous code if we are 'fixing' it
+    const fullPrompt = `Market Context: ${context || 'BTC-15m'}. 
+User Request: ${prompt}
+
+Important: If the user provides error logs, fix the code accordingly. 
+Return ONLY the full updated Python code. No explanations.`;
 
     if (provider === 'openai' || provider === 'grok') {
         const baseUrl = provider === 'grok' ? 'https://api.x.ai/v1' : 'https://api.openai.com/v1';
@@ -31,12 +50,12 @@ export async function generateStrategy(prompt: string, context?: string, provide
                 messages: [
                     { role: 'system', content: SYSTEM_PROMPT },
                     { role: 'user', content: fullPrompt }
-                ],
-                response_format: { type: 'json_object' }
+                ]
+                // Removed response_format: json as we want raw code
             })
         });
         const data: any = await response.json();
-        return JSON.parse(data.choices[0].message.content);
+        return data.choices[0].message.content;
     }
 
     if (provider === 'anthropic') {

@@ -3,7 +3,7 @@ export interface GeneratedStrategy {
     edges: any[];
 }
 
-export async function generateStrategy(prompt: string, context?: string): Promise<GeneratedStrategy> {
+export async function generateStrategy(prompt: string, context?: string): Promise<GeneratedStrategy | string> {
     const provider = localStorage.getItem('QB_AI_PROVIDER') || 'openai';
     
     // Get the correct key based on provider
