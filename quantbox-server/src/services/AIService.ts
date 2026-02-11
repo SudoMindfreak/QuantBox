@@ -1,115 +1,144 @@
 import 'dotenv/config';
+import fs from 'fs/promises';
+import path from 'path';
+import { DocService } from './DocService.js';
 
-const SYSTEM_PROMPT = `
-You are the QuantBox Python Strategy Architect. 
-Your goal is to translate the user's trading idea into a Python class that inherits from QuantBoxStrategy.
+async function getExpertContext() {
+    try {
+        const guidePath = path.join(process.cwd(), '..', 'quantbox-core', 'docs', 'AI_EXPERT_GUIDE.md');
+        const examplePath = path.join(process.cwd(), '..', 'quantbox-core', 'examples', 'volatility_scalper.py');
+        
+        const guide = await fs.readFile(guidePath, 'utf-8');
+        const example = await fs.readFile(examplePath, 'utf-8');
+        
+        return `
+${guide}
 
-API Reference:
-- self.spot_price: Current Binance spot price (e.g. 65000.5)
-- self.strike_price: The market's strike price (e.g. 65000.0)
-- self.balance: Your current USDC balance.
-- self.bull_id / self.bear_id: Token IDs for UP/DOWN sides.
-- self.latest_prices: Dict of {asset_id: {'ask': float, 'bid': float}}
-- await self.buy(outcome, qty, price_limit=0.99): outcome is 'UP' or 'DOWN'.
-- await self.sell(outcome, qty): outcome is 'UP' or 'DOWN'.
-- self.log(message, level="info"): Log to the console.
-
-Template:
+## REFERENCE EXAMPLE
 \`\`\`python
+${example}
+\`\`\`
+
+## RESEARCH TOOLS
+You have access to a researcher tool. Use it if you need more details about Polymarket or Binance APIs.
+`;
+    } catch (e) {
+        return "You are a QuantBox Strategy Architect. Write Python strategies using the QuantBoxStrategy framework.";
+    }
+}
+
+// Definition of the tool for the Gemini API
+const RESEARCH_TOOL = {
+    function_declarations: [{
+        name: "fetch_documentation",
+        description: "Fetches and reads documentation from a given URL to understand API endpoints, market rules, or technical specifications.",
+        parameters: {
+            type: "object",
+            properties: {
+                url: {
+                    type: "string",
+                    description: "The full URL of the documentation to read."
+                }
+            },
+            required: ["url"]
+        }
+    }]
+};
+
+export async function generateStrategy(prompt: string, context?: string, _provider = 'gemini', _userKey?: string) {
+    const expertContext = await getExpertContext();
+    const systemPrompt = `
+${expertContext}
+
+TASK: Implement ONLY the trading logic inside the 'on_tick' method of the 'MyStrategy' class.
+
+STRICT RULES:
+1. DO NOT write code to fetch strike prices, token IDs, or market metadata. The base class handles this.
+2. DO NOT include imports other than 'from quantbox import QuantBoxStrategy'.
+3. DO NOT write a '__main__' block.
+4. Assume all properties like 'self.strike_price' and 'self.latest_prices' are already populated.
+5. Return ONLY the class definition. NO conversational text.
+
+Structure:
 from quantbox import QuantBoxStrategy
 
 class MyStrategy(QuantBoxStrategy):
     async def on_tick(self):
-        # Your logic here
+        # Your trading logic here
         pass
-\`\`\`
-
-Return ONLY the Python code. No explanations.
 `;
 
-export async function generateStrategy(prompt: string, context?: string, provider = 'openai', userKey?: string) {
-    // Context can now include the previous code if we are 'fixing' it
     const fullPrompt = `Market Context: ${context || 'BTC-15m'}. 
 User Request: ${prompt}
 
-Important: If the user provides error logs, fix the code accordingly. 
-Return ONLY the full updated Python code. No explanations.`;
+Important: If the user provided error logs or previous code in the context, fix/update it exactly. 
+Return ONLY the full updated Python code.`;
 
-    if (provider === 'openai' || provider === 'grok') {
-        const baseUrl = provider === 'grok' ? 'https://api.x.ai/v1' : 'https://api.openai.com/v1';
-        const model = provider === 'grok' ? 'grok-beta' : 'gpt-4o-mini';
+    const finalKey = process.env.GEMINI_API_KEY;
+    if (!finalKey) throw new Error("QuantBox AI Core is offline: Master API Key missing.");
 
-        const response = await fetch(`${baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${userKey}`
-            },
-            body: JSON.stringify({
-                model,
-                messages: [
-                    { role: 'system', content: SYSTEM_PROMPT },
-                    { role: 'user', content: fullPrompt }
-                ]
-                // Removed response_format: json as we want raw code
-            })
-        });
-        const data: any = await response.json();
-        return data.choices[0].message.content;
+    const model = 'gemini-2.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${finalKey}`;
+    
+    // 1. Initial Request (May result in a Tool Call)
+    let response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: systemPrompt + "\n\nUser Request: " + fullPrompt }] }],
+            tools: [RESEARCH_TOOL],
+            generationConfig: { temperature: 0.1 }
+        })
+    });
+    
+    let data: any = await response.json();
+    if (data.error) throw new Error(`AI Engine Error: ${data.error.message}`);
+
+    let firstCandidate = data.candidates[0].content;
+    let call = firstCandidate.parts.find((p: any) => p.functionCall);
+
+    // 2. Handle Tool Call (The "Researcher" Loop)
+    if (call) {
+        const funcName = call.functionCall.name;
+        const args = call.functionCall.args;
+
+        if (funcName === 'fetch_documentation') {
+            const docContent = await DocService.fetchDoc(args.url);
+            
+            // Send the result back to Gemini
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [
+                        { role: 'user', parts: [{ text: systemPrompt + "\n\nUser Request: " + fullPrompt }] },
+                        firstCandidate, // The tool call itself
+                        {
+                            role: 'function',
+                            parts: [{
+                                functionResponse: {
+                                    name: funcName,
+                                    response: { content: docContent }
+                                }
+                            }]
+                        }
+                    ],
+                    tools: [RESEARCH_TOOL],
+                    generationConfig: { temperature: 0.1 }
+                })
+            });
+            data = await response.json();
+            if (data.error) throw new Error(`AI Engine Tool Error: ${data.error.message}`);
+        }
     }
 
-    if (provider === 'anthropic') {
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': userKey || '',
-                'anthropic-version': '2023-06-01'
-            },
-            body: JSON.stringify({
-                model: 'claude-3-5-sonnet-latest',
-                max_tokens: 4096,
-                system: SYSTEM_PROMPT,
-                messages: [{ role: 'user', content: fullPrompt }]
-            })
-        });
-        const data: any = await response.json();
-        // Claude doesn't have a native JSON mode via simple header in all regions yet, 
-        // so we parse the text block
-        return JSON.parse(data.content[0].text);
-    }
+    // Return the final result (the code)
+    const result = data.candidates[0].content.parts.find((p: any) => p.text)?.text || "";
+    
+    console.log("--- AI ENGINE OUTPUT START ---");
+    console.log(result);
+    console.log("--- AI ENGINE OUTPUT END ---");
 
-    if (provider === 'gemini') {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${userKey}`;
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: SYSTEM_PROMPT + "\n\nUser Request: " + fullPrompt }] }],
-                generationConfig: { response_mime_type: "application/json" }
-            })
-        });
-        const data: any = await response.json();
-        const text = data.candidates[0].content.parts[0].text;
-        return JSON.parse(text);
-    }
-
-    if (provider === 'ollama') {
-        const baseUrl = userKey || 'http://localhost:11434'; // In Ollama mode, userKey is the URL
-        const response = await fetch(`${baseUrl}/api/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: 'llama3',
-                system: SYSTEM_PROMPT,
-                prompt: fullPrompt,
-                stream: false,
-                format: 'json'
-            })
-        });
-        const data: any = await response.json();
-        return JSON.parse(data.response);
-    }
-
-    throw new Error(`Provider ${provider} not supported`);
+    // Robust cleaning: remove any markdown blocks if they persist
+    return result.replace(/```python/g, '').replace(/```/g, '').trim();
 }

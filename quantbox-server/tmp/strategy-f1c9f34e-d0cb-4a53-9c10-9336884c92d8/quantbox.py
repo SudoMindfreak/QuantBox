@@ -211,10 +211,7 @@ class QuantBoxStrategy:
                 msg = await ws.recv()
                 data = json.loads(msg)
                 self.spot_price = float(data['p'])
-                
-                # Only call on_tick if core state is ready
-                if self.strike_price > 0 and self.bull_id and self.latest_prices.get(self.bull_id):
-                    await self.on_tick()
+                await self.on_tick()
 
     async def _poly_ws(self):
         url = "wss://ws-subscriptions-clob.polymarket.com/ws"

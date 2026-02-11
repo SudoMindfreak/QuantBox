@@ -74,6 +74,7 @@ app.get('/api/strategies', async (c) => {
         return c.json(allStrategies.map(s => ({
             ...s,
             pythonCode: s.pythonCode,
+            marketSlug: s.marketSlug,
         })));
     } catch (error) {
         console.error('Error fetching strategies:', error);
@@ -93,6 +94,7 @@ app.post('/api/strategies', async (c) => {
             name: body.name || 'Untitled Strategy',
             description: body.description || null,
             pythonCode: body.pythonCode || null,
+            marketSlug: body.marketSlug || 'btc-updown-15m-1770311700',
             initialBalance: body.initialBalance || 100,
             currentBalance: body.initialBalance || 100,
             status: 'draft',
@@ -125,6 +127,7 @@ app.get('/api/strategies/:id', async (c) => {
         return c.json({
             ...strategy,
             pythonCode: strategy.pythonCode,
+            marketSlug: strategy.marketSlug,
         });
     } catch (error) {
         console.error('Error fetching strategy:', error);
@@ -147,6 +150,7 @@ app.put('/api/strategies/:id', async (c) => {
         if (body.name) updateData.name = body.name;
         if (body.description !== undefined) updateData.description = body.description;
         if (body.pythonCode !== undefined) updateData.pythonCode = body.pythonCode;
+        if (body.marketSlug !== undefined) updateData.marketSlug = body.marketSlug;
         if (body.initialBalance !== undefined) updateData.initialBalance = body.initialBalance;
         if (body.status) updateData.status = body.status;
 
@@ -179,7 +183,7 @@ app.post('/api/ai/generate', async (c) => {
     try {
         const { prompt, context } = await c.req.json();
         const userKey = c.req.header('x-ai-key');
-        const provider = c.req.header('x-ai-provider') || 'openai';
+        const provider = c.req.header('x-ai-provider') || 'gemini';
         
         const { generateStrategy } = await import('./services/AIService.js');
         const result = await generateStrategy(prompt, context, provider, userKey);

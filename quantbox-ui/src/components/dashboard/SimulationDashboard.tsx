@@ -8,12 +8,16 @@ import {
   TrendingUp, 
   TrendingDown, 
   Clock, 
-  DollarSign, 
   Play, 
   Square,
   Maximize2,
   Minimize2,
-  Trash2
+  Trash2,
+  BrainCircuit,
+  Workflow,
+  BarChart3,
+  Cpu,
+  Layers
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { Badge } from '@/components/ui/badge';
@@ -58,9 +62,9 @@ export function SimulationDashboard({
   const [logs, setLogs] = useState<Log[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [expandedLog, setExpandedLog] = useState(false);
+  const [isEngineReady, setIsEngineReady] = useState(false);
   const activePositions = positions.filter(p => p.quantity > 0);
 
-  // Socket Connection for Logs
   useEffect(() => {
     if (!strategyId) return;
     const socket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001');
@@ -71,6 +75,7 @@ export function SimulationDashboard({
 
     socket.on('strategy:log', (log: Log) => {
       setLogs(prev => [...prev, log]);
+      if (log.message.includes("Market Strike Price")) setIsEngineReady(true);
       if (scrollRef.current) {
         setTimeout(() => {
           scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -78,159 +83,161 @@ export function SimulationDashboard({
       }
     });
 
-    return () => {
-      socket.disconnect();
-    };
+    return () => { socket.disconnect(); };
   }, [strategyId]);
 
+  useEffect(() => { if (!isRunning) setIsEngineReady(false); }, [isRunning]);
+
   return (
-    <div className="flex flex-col h-full bg-[#09090b] text-slate-200 overflow-hidden relative font-sans">
+    <div className="flex flex-col h-full gap-6 font-sans">
       
-      {/* 1. Top Header: Market & Controls */}
-      <header className="h-16 border-b border-white/5 px-6 flex items-center justify-between bg-[#09090b]/50 backdrop-blur-md z-10 shrink-0">
-        <div className="flex items-center gap-4">
-          <div className="p-2 bg-blue-500/10 rounded-lg">
-            <Activity className="w-5 h-5 text-blue-400" />
-          </div>
-          <div>
-            <h1 className="text-sm font-bold text-white tracking-wide">{marketTitle || 'Loading Market...'}</h1>
-            <div className="flex items-center gap-2 mt-0.5">
-              <Badge variant="outline" className="border-white/10 text-[10px] text-slate-500 h-5 px-1.5 font-mono">
-                BTC-15m
-              </Badge>
-              {isRunning ? (
-                <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  LIVE
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
-                  IDLE
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="hidden md:flex items-center gap-6 px-6 border-r border-white/5 mr-2">
-             <div className="text-right">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Balance</div>
-                <div className="text-sm font-mono font-bold text-white">${balance.toFixed(2)}</div>
-             </div>
-             <div className="text-right">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">PnL</div>
-                <div className={`text-sm font-mono font-bold ${totalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {totalPnL >= 0 ? '+' : ''}{totalPnL.toFixed(2)}
-                </div>
-             </div>
-          </div>
-
-          {!isRunning ? (
-            <button
-              onClick={onRun}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg hover:shadow-blue-500/20 active:scale-95"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              Run Simulation
-            </button>
-          ) : (
-            <button
-              onClick={onStop}
-              className="flex items-center gap-2 px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/20 rounded-lg text-xs font-bold transition-all active:scale-95"
-            >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              Stop
-            </button>
-          )}
-        </div>
-      </header>
-
-      {/* 2. Main Dashboard Grid */}
-      <main className="flex-1 p-6 overflow-hidden flex flex-col gap-6">
+      {/* 1. Main Bento Grid */}
+      <div className="flex-1 grid grid-cols-12 grid-rows-12 gap-6 min-h-0">
         
-        {/* Top Row: Chart Placeholder + Positions */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
-          
-          {/* Left: Chart/Visualizer (Placeholder) */}
-          <div className="lg:col-span-2 bg-[#121214] border border-white/5 rounded-2xl p-1 relative overflow-hidden flex flex-col">
-             <div className="absolute inset-0 opacity-20 pointer-events-none" 
-                  style={{ backgroundImage: 'radial-gradient(#3b82f6 1px, transparent 1px)', backgroundSize: '24px 24px' }} 
-             />
-             <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-slate-600 gap-3">
-                 <div className="p-3 rounded-full bg-white/5">
-                    <Activity className="w-8 h-8 opacity-50" />
-                 </div>
-                 <p className="text-xs font-bold uppercase tracking-widest">Market Feed Visualization</p>
-                 <p className="text-[10px] opacity-50">Waiting for next tick...</p>
-             </div>
-          </div>
-
-          {/* Right: Active Positions */}
-          <div className="bg-[#121214] border border-white/5 rounded-2xl flex flex-col overflow-hidden">
-             <div className="p-4 border-b border-white/5 flex items-center justify-between">
-                <span className="text-xs font-bold text-white flex items-center gap-2">
-                    <Clock className="w-3.5 h-3.5 text-blue-500" />
-                    Positions
-                </span>
-                <Badge className="bg-white/5 text-slate-400 border-transparent text-[10px]">{activePositions.length}</Badge>
-             </div>
-             <ScrollArea className="flex-1 bg-black/20">
-                <div className="p-3 space-y-2">
-                   {activePositions.length === 0 ? (
-                       <div className="text-center py-10 opacity-30 text-xs uppercase font-bold">No Active Trades</div>
-                   ) : (
-                       activePositions.map((pos) => (
-                         <div key={pos.tokenId} className="bg-[#18181b] p-3 rounded-xl border border-white/5 hover:border-blue-500/30 transition-colors">
-                            <div className="flex justify-between items-start mb-2">
-                                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${pos.outcome === 'UP' || pos.outcome === 'YES' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                                    {pos.outcome}
-                                </span>
-                                <span className={`text-xs font-bold font-mono ${pos.unrealizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                    {pos.unrealizedPnL >= 0 ? '+' : ''}{pos.unrealizedPnL.toFixed(2)}
-                                </span>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                                <span>{pos.quantity} units</span>
-                                <span>@ {(pos.currentPrice * 100).toFixed(1)}¢</span>
-                            </div>
-                         </div>
-                       ))
-                   )}
+        {/* HERO: Market Visualization */}
+        <div className="col-span-12 lg:col-span-8 row-span-8 bg-white/[0.02] border border-white/[0.05] rounded-[32px] p-8 flex flex-col relative overflow-hidden group shadow-2xl">
+            <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent,rgba(0,0,0,0.4))] pointer-events-none" />
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-600/0 via-emerald-600/20 to-emerald-600/0 opacity-0 group-hover:opacity-100 transition-opacity" />
+            
+            <div className="flex items-center justify-between relative z-10 mb-8">
+                <div className="flex items-center gap-4">
+                    <div className="p-3 bg-emerald-600/10 rounded-2xl border border-emerald-500/20 text-emerald-400">
+                        <Activity className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <h2 className="text-lg font-black text-white tracking-tight uppercase">{marketTitle || 'Initializing feed...'}</h2>
+                        <div className="flex items-center gap-2 mt-1">
+                            <span className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Live Prediction Stream</span>
+                            <div className="w-1 h-1 rounded-full bg-slate-600" />
+                            <span className="text-xs font-bold text-[#3ecf8e] uppercase tracking-widest">BTC-15m-Rolling</span>
+                        </div>
+                    </div>
                 </div>
-             </ScrollArea>
-          </div>
+
+                <div className="flex items-center gap-3">
+                    <Badge className="hidden lg:flex bg-emerald-500/10 text-[#3ecf8e] border-none text-xs py-1 px-3 font-bold uppercase tracking-widest mr-4">
+                        Managed Expert AI Active
+                    </Badge>
+                    {!isRunning ? (
+                        <button onClick={onRun} className="flex items-center gap-2 px-6 py-2.5 bg-[#3ecf8e] text-black rounded-xl text-xs font-black uppercase tracking-widest hover:bg-[#30b47b] transition-all shadow-xl active:scale-95">
+                            <Play className="w-3 h-3 fill-current" />
+                            Launch Agent
+                        </button>
+                    ) : (
+                        <button onClick={onStop} className="flex items-center gap-2 px-6 py-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-rose-500/20 transition-all active:scale-95">
+                            <Square className="w-3 h-3 fill-current" />
+                            Shutdown
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            <div className="flex-1 flex flex-col items-center justify-center relative">
+                <div className="absolute inset-0 opacity-10" 
+                     style={{ backgroundImage: 'radial-gradient(#ffffff 1px, transparent 1px)', backgroundSize: '32px 32px' }} 
+                />
+                
+                <div className="relative z-10 flex flex-col items-center text-center gap-6">
+                    <div className="relative">
+                        <div className="absolute inset-0 bg-emerald-500/20 blur-[60px] rounded-full animate-pulse" />
+                        <div className="w-24 h-24 rounded-full bg-black border border-white/5 flex items-center justify-center relative shadow-2xl">
+                            <Layers className={`w-10 h-10 ${isRunning ? 'text-[#3ecf8e] animate-spin-slow' : 'text-slate-700'}`} />
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        <p className="text-sm font-black uppercase tracking-[0.3em] text-slate-300">
+                            {isRunning ? (isEngineReady ? 'Engine Operational' : 'Synchronizing Data...') : 'Engine Standby'}
+                        </p>
+                        <p className="text-xs font-medium italic text-slate-500">
+                            {isRunning ? 'Connected to Polymarket CLOB via QuantBox Managed Core' : 'Select logic parameters to begin simulation'}
+                        </p>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        {/* Bottom Row: Terminal */}
+        {/* METRICS: Account Balance */}
+        <div className="col-span-12 md:col-span-4 row-span-4 bg-white/[0.02] border border-white/[0.05] rounded-[32px] p-8 flex flex-col justify-between shadow-xl">
+            <div className="flex items-center justify-between text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+                <span>Available USDC</span>
+                <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-500">
+                    <TrendingUp className="w-4 h-4" />
+                </div>
+            </div>
+            <div>
+                <div className="text-4xl font-black text-white font-mono tracking-tighter mb-1">
+                    ${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </div>
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest">
+                    <Badge className="bg-emerald-500/10 text-emerald-500 border-none">+0.00%</Badge>
+                    <span className="text-slate-400">Global PnL</span>
+                </div>
+            </div>
+        </div>
+
+        {/* METRICS: Positions */}
+        <div className="col-span-12 md:col-span-4 row-span-4 bg-white/[0.02] border border-white/[0.05] rounded-[32px] flex flex-col overflow-hidden shadow-xl">
+            <div className="p-6 border-b border-white/[0.05] flex items-center justify-between bg-white/[0.01] text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+                <span>Active Trades</span>
+                <Badge className="bg-white/5 text-slate-200 border-none px-2 font-black tracking-normal text-xs">{activePositions.length}</Badge>
+            </div>
+            <ScrollArea className="flex-1 bg-black/20">
+                <div className="p-4 space-y-3">
+                    {activePositions.length === 0 ? (
+                        <div className="py-12 flex flex-col items-center gap-3 opacity-20 text-xs font-black uppercase tracking-widest text-slate-400">
+                            <BarChart3 className="w-8 h-8" />
+                            <span>No Positions</span>
+                        </div>
+                    ) : (
+                        activePositions.map((pos) => (
+                            <div key={pos.tokenId} className="bg-white/[0.03] border border-white/[0.05] p-4 rounded-2xl hover:border-emerald-500/30 transition-all">
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className={`text-xs font-black px-2 py-0.5 rounded uppercase tracking-tighter ${pos.outcome === 'UP' || pos.outcome === 'YES' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                                        {pos.outcome}
+                                    </span>
+                                    <span className={`text-sm font-black font-mono ${pos.unrealizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                        {pos.unrealizedPnL >= 0 ? '+' : ''}{pos.unrealizedPnL.toFixed(2)}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between text-xs text-slate-400 font-mono pt-1">
+                                    <span>{pos.quantity} units</span>
+                                    <span>@ {(pos.currentPrice * 100).toFixed(1)}¢</span>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </ScrollArea>
+        </div>
+
+        {/* LOGS: integrated */}
         <motion.div 
             initial={false}
-            animate={{ height: expandedLog ? '80%' : '35%' }}
-            className="bg-[#121214] border border-white/5 rounded-2xl flex flex-col overflow-hidden shadow-2xl relative"
+            animate={{ height: '100%' }}
+            className="col-span-12 row-span-4 bg-[#171717] border border-white/[0.05] rounded-[32px] flex flex-col overflow-hidden shadow-inner"
         >
-            <div className="h-9 border-b border-white/5 flex items-center justify-between px-4 bg-white/[0.02]">
-                <div className="flex items-center gap-2">
-                    <Terminal className="w-3.5 h-3.5 text-slate-400" />
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">System Logs</span>
+            <div className="h-12 border-b border-white/[0.05] flex items-center justify-between px-8 bg-white/[0.01] text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+                <div className="flex items-center gap-3">
+                    <Terminal className="w-4 h-4 text-slate-500" />
+                    <span>System Trace</span>
                 </div>
-                <div className="flex items-center gap-2">
-                    <button onClick={() => setLogs([])} className="p-1 hover:text-white text-slate-500 transition-colors">
-                        <Trash2 className="w-3 h-3" />
-                    </button>
-                    <button onClick={() => setExpandedLog(!expandedLog)} className="p-1 hover:text-white text-slate-500 transition-colors">
-                        {expandedLog ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-                    </button>
+                <div className="flex items-center gap-4 text-xs font-bold uppercase tracking-widest">
+                    <button onClick={() => setLogs([])} className="text-slate-500 hover:text-white transition-colors">Clear</button>
+                    <div className="w-px h-3 bg-white/10" />
+                    <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="text-slate-300">Stream Active</span>
+                    </div>
                 </div>
             </div>
             
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed space-y-1 bg-[#09090b]">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 font-mono text-xs leading-relaxed space-y-1 bg-black/40">
                 {logs.length === 0 && (
-                    <div className="text-slate-700 select-none italic">Waiting for strategy output...</div>
+                    <div className="text-slate-700 italic uppercase tracking-widest text-xs pt-4">Waiting for engine execution data...</div>
                 )}
                 {logs.map((log, i) => (
-                    <div key={i} className="flex gap-3 group">
-                        <span className="text-slate-700 shrink-0 select-none w-16 opacity-50">{new Date(log.timestamp).toLocaleTimeString([], { hour12: false })}</span>
+                    <div key={i} className="flex gap-6 group hover:bg-white/[0.02] -mx-2 px-2 py-0.5 rounded transition-colors font-medium">
+                        <span className="text-slate-600 shrink-0 select-none w-20 opacity-50">{new Date(log.timestamp).toLocaleTimeString([], { hour12: false, fractionalSecondDigits: 1 })}</span>
                         <span className={`${
                             log.type === 'error' ? 'text-rose-400' : 
                             log.type === 'success' ? 'text-emerald-400' : 
@@ -243,7 +250,7 @@ export function SimulationDashboard({
             </div>
         </motion.div>
 
-      </main>
+      </div>
     </div>
   );
 }

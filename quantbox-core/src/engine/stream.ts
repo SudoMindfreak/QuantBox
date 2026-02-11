@@ -7,7 +7,7 @@ import { OrderBookMessage } from '../types/polymarket';
  */
 export class OrderbookStream extends EventEmitter {
     private ws: WebSocket | null = null;
-    private readonly wsUrl = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
+    private readonly wsUrl = 'wss://ws-subscriptions-clob.polymarket.com/ws';
     private subscribedTokens: Set<string> = new Set();
     private keepAliveInterval: NodeJS.Timeout | null = null;
     private reconnectTimeout: NodeJS.Timeout | null = null;

@@ -7,6 +7,7 @@ export const strategies = sqliteTable('strategies', {
 
     // Python Strategy
     pythonCode: text('python_code'),
+    marketSlug: text('market_slug'),
 
     // Balance & Risk
     initialBalance: real('initial_balance').notNull().default(100),

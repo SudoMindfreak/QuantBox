@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Send, Bot, User, StopCircle } from 'lucide-react';
+import { Sparkles, Send, Bot, User, StopCircle, BrainCircuit, Loader2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
@@ -12,19 +12,17 @@ interface Message {
 
 interface AIAssistantPanelProps {
     onGenerate: (prompt: string) => Promise<void>;
-    onClose?: () => void;
 }
 
 export function AIAssistantPanel({ onGenerate }: AIAssistantPanelProps) {
     const [messages, setMessages] = useState<Message[]>([
-        { role: 'assistant', content: 'I am ready to code your strategy. Describe what you want the bot to do.' }
+        { role: 'assistant', content: 'Agent core synchronized. Describe the trading logic you want to deploy.' }
     ]);
     const [input, setInput] = useState('');
     const [isGenerating, setIsGenerating] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-    // Auto-scroll to bottom
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -33,26 +31,21 @@ export function AIAssistantPanel({ onGenerate }: AIAssistantPanelProps) {
 
     const handleSend = async () => {
         if (!input.trim() || isGenerating) return;
-
         const userMessage = input.trim();
         setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
         setInput('');
-        
-        // Reset height
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
-
         setIsGenerating(true);
-
         try {
             await onGenerate(userMessage);
             setMessages(prev => [...prev, { 
                 role: 'assistant', 
-                content: 'I\'ve updated the strategy logic based on your request. You can run it now to see the results.' 
+                content: 'Expert logic updated. You can now launch the agent to test the new parameters.' 
             }]);
         } catch (error) {
             setMessages(prev => [...prev, { 
                 role: 'assistant', 
-                content: 'I encountered an error while updating the code. Please check your API key or try again.' 
+                content: 'Failed to synchronize logic. Please verify your connection.' 
             }]);
         } finally {
             setIsGenerating(false);
@@ -67,29 +60,40 @@ export function AIAssistantPanel({ onGenerate }: AIAssistantPanelProps) {
     };
 
     return (
-        <div className="flex flex-col h-full bg-[#09090b] border-r border-white/5 relative">
+        <div className="flex flex-col h-full bg-[#171717] relative font-sans">
             {/* Header */}
-            <div className="h-14 flex items-center px-4 border-b border-white/5 shrink-0 bg-[#09090b]/50 backdrop-blur">
-                <span className="font-bold text-sm tracking-tight text-slate-200">QuantBox AI</span>
-                <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">BETA</span>
+            <div className="h-14 flex items-center px-6 border-b border-white/[0.05] shrink-0 bg-black/20 backdrop-blur-xl">
+                <div className="flex items-center gap-3 text-xs font-bold uppercase tracking-[0.2em] text-slate-200">
+                    <div className="p-1.5 bg-emerald-600/10 rounded-lg text-[#3ecf8e]">
+                        <BrainCircuit className="w-4 h-4" />
+                    </div>
+                    <span>Intelligence</span>
+                </div>
             </div>
 
             {/* Chat History */}
             <ScrollArea className="flex-1" viewportRef={scrollRef}>
-                <div className="flex flex-col gap-6 p-4 pb-4">
+                <div className="flex flex-col gap-8 p-6">
                     {messages.map((msg, i) => (
-                        <div key={i} className={cn("flex gap-3 text-sm", msg.role === 'user' ? "flex-row-reverse" : "")}>
-                            <div className={cn(
-                                "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border shadow-sm",
-                                msg.role === 'assistant' 
-                                    ? "bg-[#18181b] border-white/5 text-blue-400" 
-                                    : "bg-blue-600 border-blue-500 text-white"
-                            )}>
-                                {msg.role === 'assistant' ? <Sparkles className="w-4 h-4" /> : <User className="w-4 h-4" />}
+                        <div key={i} className={cn("flex flex-col gap-2 text-xs font-bold uppercase tracking-widest", msg.role === 'user' ? "items-end text-slate-400" : "items-start text-[#3ecf8e]")}>
+                            <div className="flex items-center gap-2 mb-1 px-1">
+                                {msg.role === 'assistant' ? (
+                                    <>
+                                        <div className="w-1.5 h-1.5 rounded-full bg-[#3ecf8e] shadow-[0_0_8px_rgba(62,207,142,0.8)]" />
+                                        <span>System</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>Operator</span>
+                                        <div className="w-1.5 h-1.5 rounded-full bg-slate-600" />
+                                    </>
+                                )}
                             </div>
                             <div className={cn(
-                                "flex-1 leading-relaxed px-3 py-2 rounded-lg max-w-[85%]",
-                                msg.role === 'assistant' ? "text-slate-300" : "bg-blue-600/10 text-blue-100 border border-blue-500/20"
+                                "leading-relaxed px-4 py-3 rounded-2xl max-w-[90%] text-sm normal-case tracking-normal transition-all",
+                                msg.role === 'assistant' 
+                                    ? "text-slate-200 bg-white/[0.03] border border-white/[0.05] rounded-tl-none shadow-sm font-medium" 
+                                    : "bg-[#3ecf8e] text-black rounded-tr-none shadow-lg shadow-emerald-900/20 font-semibold"
                             )}>
                                 {msg.content}
                             </div>
@@ -97,15 +101,18 @@ export function AIAssistantPanel({ onGenerate }: AIAssistantPanelProps) {
                     ))}
                     
                     {isGenerating && (
-                         <div className="flex gap-3 text-sm">
-                             <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-[#18181b] border border-white/5 text-blue-400">
-                                 <Sparkles className="w-4 h-4 animate-pulse" />
+                         <div className="flex flex-col items-start gap-2 text-xs font-bold uppercase tracking-widest text-[#3ecf8e]">
+                             <div className="flex items-center gap-2 mb-1 px-1">
+                                <div className="w-1.5 h-1.5 rounded-full bg-[#3ecf8e] animate-pulse" />
+                                <span>Compiling Logic</span>
                              </div>
-                             <div className="flex items-center gap-2 text-slate-500 italic">
-                                 <span className="w-1.5 h-1.5 bg-slate-600 rounded-full animate-bounce" />
-                                 <span className="w-1.5 h-1.5 bg-slate-600 rounded-full animate-bounce delay-75" />
-                                 <span className="w-1.5 h-1.5 bg-slate-600 rounded-full animate-bounce delay-150" />
-                                 Writing Python code...
+                             <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-white/[0.02] border border-white/[0.05] border-dashed text-slate-400 italic normal-case tracking-normal">
+                                 <div className="flex gap-1">
+                                     <span className="w-1 h-1 bg-[#3ecf8e] rounded-full animate-bounce" />
+                                     <span className="w-1 h-1 bg-[#3ecf8e] rounded-full animate-bounce [animation-delay:0.2s]" />
+                                     <span className="w-1 h-1 bg-[#3ecf8e] rounded-full animate-bounce [animation-delay:0.4s]" />
+                                 </div>
+                                 <span>Injecting expert patterns...</span>
                              </div>
                          </div>
                     )}
@@ -113,41 +120,38 @@ export function AIAssistantPanel({ onGenerate }: AIAssistantPanelProps) {
             </ScrollArea>
 
             {/* Input Area */}
-            <div className="p-4 shrink-0 bg-[#09090b]">
-                <div className="relative bg-[#18181b] border border-white/10 rounded-xl shadow-lg focus-within:ring-1 focus-within:ring-blue-500/50 transition-all">
+            <div className="p-6 bg-[#171717] border-t border-white/[0.05]">
+                <div className="relative bg-white/[0.03] border border-white/[0.08] rounded-2xl transition-all focus-within:border-emerald-500/40 focus-within:bg-white/[0.05] group">
                     <textarea
                         ref={textareaRef}
                         value={input}
                         onChange={(e) => {
                             setInput(e.target.value);
                             e.target.style.height = 'auto';
-                            e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                            e.target.style.height = `${Math.min(e.target.scrollHeight, 150)}px`;
                         }}
                         onKeyDown={handleKeyDown}
-                        placeholder="Build a strategy..."
-                        className="w-full bg-transparent border-none text-sm text-slate-200 placeholder:text-slate-600 resize-none p-3 pr-12 max-h-[120px] focus:ring-0 focus:outline-none"
+                        placeholder="Command your agent..."
+                        className="w-full bg-transparent border-none text-sm text-white placeholder:text-slate-600 resize-none p-4 pr-12 focus:ring-0 focus:outline-none min-h-[56px] font-medium"
                         rows={1}
-                        style={{ minHeight: '44px' }}
                     />
-                    <div className="absolute right-2 bottom-2">
+                    <div className="absolute right-3 bottom-3">
                          {isGenerating ? (
-                             <button disabled className="p-1.5 rounded-lg bg-slate-800 text-slate-500 cursor-not-allowed">
-                                 <StopCircle className="w-4 h-4" />
-                             </button>
+                             <div className="p-2 text-[#3ecf8e]">
+                                 <Loader2 className="w-4 h-4 animate-spin" />
+                             </div>
                          ) : (
                              <button 
                                 onClick={handleSend}
                                 disabled={!input.trim()}
-                                className="p-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors"
+                                className="p-2 rounded-xl bg-[#3ecf8e] text-black hover:bg-[#30b47b] disabled:opacity-20 transition-all shadow-xl"
                              >
                                  <Send className="w-3.5 h-3.5" />
                              </button>
                          )}
                     </div>
                 </div>
-                <div className="text-[10px] text-center text-slate-600 mt-2 font-medium">
-                    AI updates your hidden Python strategy file directly.
-                </div>
+                <p className="text-[10px] text-center text-slate-600 mt-4 uppercase tracking-[0.2em] font-black">Secure Core Execution</p>
             </div>
         </div>
     );

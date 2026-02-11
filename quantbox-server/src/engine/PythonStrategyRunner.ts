@@ -3,27 +3,27 @@ import { Server } from 'socket.io';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs/promises';
-import { randomUUID } from 'crypto';
 
 export class PythonStrategyRunner extends EventEmitter {
     private id: string;
     private pythonCode: string;
+    private marketSlug: string;
     private io: Server;
     private process: ChildProcess | null = null;
-    private tempFilePath: string | null = null;
     private active: boolean = false;
 
     constructor(id: string, strategy: any, io: Server) {
         super();
         this.id = id;
         this.pythonCode = strategy.pythonCode;
+        this.marketSlug = strategy.marketSlug || 'btc-updown-15m-1770311700';
         this.io = io;
     }
 
     public async start() {
         if (this.active) return;
         this.active = true;
-        this.log('🚀 Starting Python Strategy...', 'info');
+        this.log(`🚀 Starting Python Strategy for ${this.marketSlug}...`, 'info');
 
         try {
             // 1. Prepare Workspace
@@ -37,12 +37,31 @@ export class PythonStrategyRunner extends EventEmitter {
             // 3. Create user strategy file
             const userScriptPath = path.join(workspaceDir, 'main.py');
             
-            // Append the runner code to the user's class
-            const fullCode = `${this.pythonCode}
+            // Clean the code: strip markdown backticks and any potential preamble
+            let cleanCode = this.pythonCode
+                .replace(/```python/gi, '')
+                .replace(/```/g, '')
+                .trim();
+            
+            // If the code still doesn't start with the import, it's likely broken or has conversational text
+            if (!cleanCode.includes('from quantbox import QuantBoxStrategy')) {
+                this.log("⚠️ AI code format looks unusual. It may contain explanations.", "warning");
+            }
+
+            // Construct the full executable script
+            const fullCode = `import json
+import asyncio
+${cleanCode}
 
 if __name__ == "__main__":
-    bot = MyStrategy()
-    asyncio.run(bot.run())`;
+    try:
+        bot = MyStrategy()
+        asyncio.run(bot.run())
+    except NameError:
+        print(json.dumps({"type": "log", "level": "error", "message": "CRITICAL: The AI generated a strategy without the 'MyStrategy' class. Please ask it to 'Fix the class name'."}))
+    except Exception as e:
+        print(json.dumps({"type": "log", "level": "error", "message": f"CRITICAL: Failed to initialize strategy: {str(e)}"}))`;
+
             await fs.writeFile(userScriptPath, fullCode);
 
             // 4. Spawn Process
@@ -50,7 +69,7 @@ if __name__ == "__main__":
                 cwd: workspaceDir,
                 env: {
                     ...process.env,
-                    MARKET_SLUG: 'btc-updown-15m-1770311700', // Should be dynamic
+                    MARKET_SLUG: this.marketSlug,
                     SIMULATION_ID: this.id,
                     API_URL: `http://localhost:${process.env.PORT || 3001}/api/sim`,
                     INITIAL_CAPITAL: '1000'
@@ -65,7 +84,6 @@ if __name__ == "__main__":
                         const parsed = JSON.parse(line);
                         this.handlePythonEvent(parsed);
                     } catch (e) {
-                        // Regular log
                         this.log(line, 'info');
                     }
                 }

@@ -115,6 +115,7 @@ class QuantBoxStrategy:
         for asset_id, size in self.inventory.items():
             if size == 0: continue
             
+            # Calculate metrics (simplified for now as we track cost in aggregate)
             avg_entry = 0.50 
             if self.inventory[asset_id] > 0 and self.inventory_cost[asset_id] > 0:
                 avg_entry = self.inventory_cost[asset_id] / self.inventory[asset_id]
@@ -170,39 +171,18 @@ class QuantBoxStrategy:
 
     async def _fetch_market_info(self):
         try:
-            self.log(f"🔍 Fetching market info for {self.slug}...")
             url = f"https://gamma-api.polymarket.com/events?slug={self.slug}"
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as resp:
                     data = await resp.json()
-                    event = data[0]
-                    market = event['markets'][0]
-                    
+                    market = data[0]['markets'][0]
                     self.bull_id = json.loads(market['clobTokenIds'])[0]
                     self.bear_id = json.loads(market['clobTokenIds'])[1]
                     self.asset_ids = [self.bull_id, self.bear_id]
                     self.asset_map = {self.bull_id: "UP", self.bear_id: "DOWN"}
-                    
-                    # Fetch Strike Price
-                    end_date_str = market.get('endDate')
-                    if end_date_str:
-                        dt_end = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
-                        start_ts = int(dt_end.timestamp() - 900)
-                        
-                        binance_url = f"https://api.binance.com/api/v3/klines"
-                        params = {
-                            "symbol": "BTCUSDT",
-                            "interval": "15m",
-                            "startTime": start_ts * 1000,
-                            "limit": 1
-                        }
-                        async with session.get(binance_url, params=params) as b_resp:
-                            b_data = await b_resp.json()
-                            if b_data and len(b_data) > 0:
-                                self.strike_price = float(b_data[0][1])
-                                self.log(f"🎯 Market Strike Price: ${self.strike_price:.2f}", "success")
+                    self.strike_price = 0.0 
         except Exception as e:
-            self.log(f"Failed to fetch market info: {str(e)}", "error")
+            self.log(f"Failed to fetch market info: {e}", "error")
 
     async def _binance_ws(self):
         url = "wss://stream.binance.com:9443/ws/btcusdt@trade"
@@ -211,58 +191,31 @@ class QuantBoxStrategy:
                 msg = await ws.recv()
                 data = json.loads(msg)
                 self.spot_price = float(data['p'])
-                
-                # Only call on_tick if core state is ready
-                if self.strike_price > 0 and self.bull_id and self.latest_prices.get(self.bull_id):
-                    await self.on_tick()
+                await self.on_tick()
 
     async def _poly_ws(self):
         url = "wss://ws-subscriptions-clob.polymarket.com/ws"
-        self.log(f"🔌 Connecting to Polymarket WS for {len(self.asset_ids)} assets...")
-        
         async with websockets.connect(url) as ws:
             await ws.send(json.dumps({
                 "type": "market",
                 "assets_ids": self.asset_ids,
                 "initial_dump": True
             }))
-            
-            orderbooks = {aid: {"bids": {}, "asks": {}} for aid in self.asset_ids}
-            
             while self.running:
                 try:
                     msg = await asyncio.wait_for(ws.recv(), timeout=30)
                     if msg == "PONG": continue
                     data = json.loads(msg)
                     messages = data if isinstance(data, list) else [data]
-                    
                     for m in messages:
-                        event_type = m.get("event_type")
                         asset_id = m.get("asset_id")
-                        if not asset_id or asset_id not in orderbooks: continue
-                        
-                        if event_type == "book":
-                            orderbooks[asset_id]["bids"] = {o["price"]: o["size"] for o in m.get("bids", [])}
-                            orderbooks[asset_id]["asks"] = {o["price"]: o["size"] for o in m.get("asks", [])}
-                        elif event_type == "price_change":
-                            for side in ["bids", "asks"]:
-                                for update in m.get(side, []):
-                                    price = update["price"]
-                                    size = update["size"]
-                                    if size == "0" or size == 0:
-                                        orderbooks[asset_id][side].pop(price, None)
-                                    else:
-                                        orderbooks[asset_id][side][price] = size
-                        
-                        bids = orderbooks[asset_id]["bids"]
-                        asks = orderbooks[asset_id]["asks"]
-                        if bids and asks:
-                            best_bid = float(max(bids.keys(), key=float))
-                            best_ask = float(min(asks.keys(), key=float))
-                            self.latest_prices[asset_id] = {"ask": best_ask, "bid": best_bid}
+                        if not asset_id or "asks" not in m: continue
+                        best_ask = float(min(m["asks"], key=lambda x: float(x["price"]))["price"])
+                        best_bid = float(max(m["bids"], key=lambda x: float(x["price"]))["price"])
+                        self.latest_prices[asset_id] = {"ask": best_ask, "bid": best_bid}
                 except asyncio.TimeoutError:
                     await ws.send("PING")
                 except Exception as e:
-                    self.log(f"Polymarket WS Error: {str(e)}", "error")
-                    await asyncio.sleep(2)
+                    self.log(f"Polymarket WS Error: {e}", "error")
+                    await asyncio.sleep(5)
                     break
