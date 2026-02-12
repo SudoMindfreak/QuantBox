@@ -157,6 +157,9 @@ class QuantBoxStrategy:
         self.log(f"🚀 Strategy Started | Market: {self.slug}")
         await self._fetch_market_info()
         
+        # Warmup prices via REST before starting WebSocket
+        await self._warmup_prices()
+        
         tasks = [
             asyncio.create_task(self._binance_ws()),
             asyncio.create_task(self._poly_ws())
@@ -216,53 +219,78 @@ class QuantBoxStrategy:
                 if self.strike_price > 0 and self.bull_id and self.latest_prices.get(self.bull_id):
                     await self.on_tick()
 
-    async def _poly_ws(self):
-        url = "wss://ws-subscriptions-clob.polymarket.com/ws"
-        self.log(f"🔌 Connecting to Polymarket WS for {len(self.asset_ids)} assets...")
-        
-        async with websockets.connect(url) as ws:
-            await ws.send(json.dumps({
-                "type": "market",
-                "assets_ids": self.asset_ids,
-                "initial_dump": True
-            }))
-            
-            orderbooks = {aid: {"bids": {}, "asks": {}} for aid in self.asset_ids}
-            
-            while self.running:
+    async def _warmup_prices(self):
+        """Fetches initial orderbook snapshot via REST (Sorted)."""
+        self.log(f"🔥 Warming up order books... Assets: {self.asset_ids}")
+        async with aiohttp.ClientSession() as session:
+            for tid in self.asset_ids:
                 try:
-                    msg = await asyncio.wait_for(ws.recv(), timeout=30)
-                    if msg == "PONG": continue
-                    data = json.loads(msg)
-                    messages = data if isinstance(data, list) else [data]
+                    url = f"https://clob.polymarket.com/book?token_id={tid}"
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            asks = data.get("asks", [])
+                            bids = data.get("bids", [])
+                            if asks and bids:
+                                # Sort orderbook
+                                asks.sort(key=lambda x: float(x["price"]))
+                                bids.sort(key=lambda x: float(x["price"]), reverse=True)
+                                await self._update_prices({"asset_id": tid, "asks": asks, "bids": bids})
+                except Exception:
+                    pass
+
+    async def _update_prices(self, data):
+        """Updates latest prices from orderbook data."""
+        asset_id = data.get("asset_id")
+        if not asset_id or not data.get("asks") or not data.get("bids"):
+            return
+
+        best_ask = float(min(data["asks"], key=lambda x: float(x["price"]))["price"])
+        best_bid = float(max(data["bids"], key=lambda x: float(x["price"]))["price"])
+        
+        self.latest_prices[asset_id] = {"ask": best_ask, "bid": best_bid}
+
+    async def _ping(self, ws):
+        """Send periodic PING messages to keep WebSocket alive."""
+        try:
+            while True:
+                await asyncio.sleep(10)
+                await ws.send("PING")
+        except:
+            pass
+
+    async def _poly_ws(self):
+        """WebSocket connection for real-time Polymarket orderbook updates."""
+        url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+        self.log(f"🔌 Connecting to Polymarket WebSocket...")
+        
+        while self.running:
+            try:
+                async with websockets.connect(url) as ws:
+                    ping_task = asyncio.create_task(self._ping(ws))
+                    try:
+                        if self.asset_ids:
+                            await ws.send(json.dumps({"assets_ids": self.asset_ids, "type": "market"}))
+                            self.log(f"✅ Connected to Polymarket for {len(self.asset_ids)} assets")
+                        
+                        async for msg in ws:
+                            if msg == "PONG":
+                                continue
+                            
+                            data = json.loads(msg)
+                            items = data if isinstance(data, list) else [data]
+                            
+                            for item in items:
+                                if "asks" in item:
+                                    await self._update_prices(item)
+                            
+                            # Call on_tick if we have all required data
+                            if self.strike_price > 0 and self.bull_id and self.latest_prices.get(self.bull_id):
+                                await self.on_tick()
                     
-                    for m in messages:
-                        event_type = m.get("event_type")
-                        asset_id = m.get("asset_id")
-                        if not asset_id or asset_id not in orderbooks: continue
-                        
-                        if event_type == "book":
-                            orderbooks[asset_id]["bids"] = {o["price"]: o["size"] for o in m.get("bids", [])}
-                            orderbooks[asset_id]["asks"] = {o["price"]: o["size"] for o in m.get("asks", [])}
-                        elif event_type == "price_change":
-                            for side in ["bids", "asks"]:
-                                for update in m.get(side, []):
-                                    price = update["price"]
-                                    size = update["size"]
-                                    if size == "0" or size == 0:
-                                        orderbooks[asset_id][side].pop(price, None)
-                                    else:
-                                        orderbooks[asset_id][side][price] = size
-                        
-                        bids = orderbooks[asset_id]["bids"]
-                        asks = orderbooks[asset_id]["asks"]
-                        if bids and asks:
-                            best_bid = float(max(bids.keys(), key=float))
-                            best_ask = float(min(asks.keys(), key=float))
-                            self.latest_prices[asset_id] = {"ask": best_ask, "bid": best_bid}
-                except asyncio.TimeoutError:
-                    await ws.send("PING")
-                except Exception as e:
-                    self.log(f"Polymarket WS Error: {str(e)}", "error")
-                    await asyncio.sleep(2)
-                    break
+                    finally:
+                        ping_task.cancel()
+            
+            except Exception as e:
+                self.log(f"Polymarket WS Error: {e}", "error")
+                await asyncio.sleep(5)

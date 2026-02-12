@@ -7,10 +7,10 @@ async function getExpertContext() {
     try {
         const guidePath = path.join(process.cwd(), '..', 'quantbox-core', 'docs', 'AI_EXPERT_GUIDE.md');
         const examplePath = path.join(process.cwd(), '..', 'quantbox-core', 'examples', 'volatility_scalper.py');
-        
+
         const guide = await fs.readFile(guidePath, 'utf-8');
         const example = await fs.readFile(examplePath, 'utf-8');
-        
+
         return `
 ${guide}
 
@@ -79,7 +79,7 @@ Return ONLY the full updated Python code.`;
 
     const model = 'gemini-2.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${finalKey}`;
-    
+
     // 1. Initial Request (May result in a Tool Call)
     let response = await fetch(url, {
         method: 'POST',
@@ -90,7 +90,7 @@ Return ONLY the full updated Python code.`;
             generationConfig: { temperature: 0.1 }
         })
     });
-    
+
     let data: any = await response.json();
     if (data.error) throw new Error(`AI Engine Error: ${data.error.message}`);
 
@@ -104,7 +104,7 @@ Return ONLY the full updated Python code.`;
 
         if (funcName === 'fetch_documentation') {
             const docContent = await DocService.fetchDoc(args.url);
-            
+
             // Send the result back to Gemini
             response = await fetch(url, {
                 method: 'POST',
@@ -134,11 +134,32 @@ Return ONLY the full updated Python code.`;
 
     // Return the final result (the code)
     const result = data.candidates[0].content.parts.find((p: any) => p.text)?.text || "";
-    
+
     console.log("--- AI ENGINE OUTPUT START ---");
     console.log(result);
     console.log("--- AI ENGINE OUTPUT END ---");
 
     // Robust cleaning: remove any markdown blocks if they persist
-    return result.replace(/```python/g, '').replace(/```/g, '').trim();
+    const cleanedCode = result.replace(/```python/g, '').replace(/```/g, '').trim();
+
+    // ==========================================
+    // VALIDATE GENERATED CODE
+    // ==========================================
+    const { validateStrategyCode, formatValidationResults } = await import('./CodeValidator.js');
+    const validation = validateStrategyCode(cleanedCode);
+
+    if (!validation.valid) {
+        console.error("❌ CODE VALIDATION FAILED:");
+        console.error(formatValidationResults(validation));
+        throw new Error(`Generated code has errors:\n${formatValidationResults(validation)}`);
+    }
+
+    if (validation.warnings.length > 0) {
+        console.warn("⚠️ CODE VALIDATION WARNINGS:");
+        console.warn(formatValidationResults(validation));
+    } else {
+        console.log("✅ Code validation passed with no issues!");
+    }
+
+    return cleanedCode;
 }

@@ -1,11 +1,11 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { 
-  Plus, 
-  Clock, 
-  Activity, 
-  Trash2, 
+import {
+  Plus,
+  Clock,
+  Activity,
+  Trash2,
   ChevronRight,
   Cpu,
   ArrowRight
@@ -79,9 +79,10 @@ export default function DashboardPage() {
             <h1 className="text-2xl font-black text-white tracking-tight leading-none mb-1 uppercase">Strategy Dashboard</h1>
             <p className="text-xs font-bold text-slate-500 uppercase tracking-[0.2em]">Manage your active AI agents</p>
           </div>
-          
+
+
           <button
-            onClick={() => router.push('/')}
+            onClick={() => router.push('/new')}
             className="group flex items-center gap-3 px-6 py-3 bg-[#3ecf8e] text-black rounded-xl font-bold text-xs transition-all shadow-xl active:scale-95 uppercase tracking-widest"
           >
             <Plus className="w-4 h-4" />
@@ -94,7 +95,7 @@ export default function DashboardPage() {
             [1, 2, 3].map(i => <div key={i} className="h-48 bg-white/5 rounded-[24px] animate-pulse border border-white/5" />)
           ) : strategies.length > 0 ? (
             strategies.map((s) => (
-              <Card 
+              <Card
                 key={s.id}
                 onClick={() => router.push(`/editor/${s.id}`)}
                 className="group bg-[#232323] border border-white/5 hover:border-[#3ecf8e]/50 transition-all cursor-pointer overflow-hidden shadow-2xl relative backdrop-blur-md rounded-[24px]"
@@ -122,7 +123,7 @@ export default function DashboardPage() {
                       {new Date(s.updatedAt).toLocaleDateString()}
                     </div>
                     <div className="p-1.5 rounded-lg bg-emerald-500/5 group-hover:bg-emerald-500/10 transition-colors">
-                        <ChevronRight className="w-4 h-4 text-[#3ecf8e] transition-all transform group-hover:translate-x-0.5" />
+                      <ChevronRight className="w-4 h-4 text-[#3ecf8e] transition-all transform group-hover:translate-x-0.5" />
                     </div>
                   </div>
                 </CardContent>
@@ -135,7 +136,7 @@ export default function DashboardPage() {
               </div>
               <h3 className="text-white font-bold mb-2 text-lg uppercase tracking-tight">No agents found</h3>
               <p className="text-slate-500 text-sm mb-8 max-w-xs">Start by prompting your first idea on the home page to initialize an expert agent.</p>
-              <button 
+              <button
                 onClick={() => router.push('/')}
                 className="text-[#3ecf8e] text-xs font-black uppercase tracking-[0.2em] hover:text-[#30b47b] transition-colors flex items-center gap-2"
               >
